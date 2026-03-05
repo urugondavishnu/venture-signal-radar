@@ -2,7 +2,7 @@
  * Backend API Client
  */
 
-const API_BASE = 'http://localhost:3001/api';
+const API_BASE = 'https://venture-signal-radar.onrender.com/api';
 
 // ---------- Companies ----------
 

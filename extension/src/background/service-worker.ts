@@ -7,7 +7,7 @@
  * (e.g. service worker killed by Chrome), the alarm force-completes stale agents.
  */
 
-const API_BASE = 'http://localhost:3001/api';
+const API_BASE = 'https://venture-signal-radar.onrender.com/api';
 const RUN_TIMEOUT_MINUTES = 5.5; // Slightly longer than backend's 5-min agent timeout
 
 // ---- Types (duplicated here to avoid import issues in service worker bundle) ----
