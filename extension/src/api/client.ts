@@ -2,7 +2,7 @@
  * Backend API Client
  */
 
-const API_BASE = 'https://backend-beta-sage-41.vercel.app/api';
+const API_BASE = 'http://localhost:3001/api';
 
 // ---------- Companies ----------
 

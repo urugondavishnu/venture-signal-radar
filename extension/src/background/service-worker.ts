@@ -7,7 +7,7 @@
  * (e.g. service worker killed by Chrome), the alarm force-completes stale agents.
  */
 
-const API_BASE = 'https://backend-beta-sage-41.vercel.app/api';
+const API_BASE = 'http://localhost:3001/api';
 const RUN_TIMEOUT_MINUTES = 5.5; // Slightly longer than backend's 5-min agent timeout
 
 // ---- Types (duplicated here to avoid import issues in service worker bundle) ----
@@ -75,7 +75,6 @@ async function forceCompleteRun(companyId: string): Promise<void> {
 
   console.log(`[SW] Force-completing run for ${run.companyName} (timeout)`);
 
-  // Mark all non-complete agents as complete with 0 signals
   const updatedAgents = run.agents.map((a) =>
     a.status !== 'complete' && a.status !== 'error'
       ? { ...a, status: 'complete' as const, findings: { signals: [] }, message: '0 results found' }
@@ -83,23 +82,6 @@ async function forceCompleteRun(companyId: string): Promise<void> {
   );
 
   await updateStoredRun(companyId, { agents: updatedAgents, isComplete: true });
-}
-
-// ---- Email sending (separate request to avoid serverless timeout) ----
-
-async function sendReportEmail(companyId: string, reportId: string): Promise<boolean> {
-  try {
-    const response = await fetch(`${API_BASE}/send-report-email`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ company_id: companyId, report_id: reportId }),
-    });
-    const result = await response.json();
-    return result.success === true;
-  } catch (err) {
-    console.error('[SW] Email send failed:', err);
-    return false;
-  }
 }
 
 // ---- SSE stream reader ----
@@ -180,14 +162,12 @@ async function startAgentRun(companyId: string, companyName: string): Promise<vo
           break;
         case 'report_generated':
           await updateStoredRun(companyId, { liveReport: data.report_data as Record<string, unknown> });
-          // Send email via separate endpoint (avoids serverless timeout)
-          sendReportEmail(companyId, data.report_id as string).then((sent: boolean) => {
-            updateStoredRun(companyId, { emailSent: sent });
-          });
+          break;
+        case 'email_sent':
+          await updateStoredRun(companyId, { emailSent: (data as Record<string, unknown>).success as boolean });
           break;
         case 'pipeline_complete':
           await updateStoredRun(companyId, { isComplete: true });
-          // Clear the fallback alarm since the run completed normally
           chrome.alarms.clear(`run-timeout-${companyId}`);
           break;
       }
@@ -248,7 +228,6 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   }
 
   if (message.type === 'START_RUN') {
-    // Fire and forget — streaming happens in background
     startAgentRun(message.companyId, message.companyName);
     sendResponse({ ok: true });
     return false;

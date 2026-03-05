@@ -7,7 +7,6 @@ import { companyRoutes } from './routes/companies';
 import { agentRoutes } from './routes/agents';
 import { reportRoutes } from './routes/reports';
 import { userRoutes } from './routes/users';
-import { cronRoutes } from './routes/cron';
 
 const app = express();
 
@@ -27,6 +26,5 @@ app.use('/api', companyRoutes);
 app.use('/api', agentRoutes);
 app.use('/api', reportRoutes);
 app.use('/api', userRoutes);
-app.use('/api', cronRoutes);
 
 export default app;

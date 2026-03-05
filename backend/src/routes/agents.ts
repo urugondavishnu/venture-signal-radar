@@ -1,7 +1,7 @@
 import { Router, Request, Response } from 'express';
 import { getCompanyById, updateLastAgentRun } from '../services/company-service';
 import { storeSignals } from '../services/signal-service';
-import { generateReportFromFindings, storeReport, getReportById } from '../services/report-service';
+import { generateReportFromFindings, storeReport } from '../services/report-service';
 import { sendReportEmail } from '../services/email-service';
 import { getUserSettings } from '../services/user-service';
 import { runIntelligenceAgents } from '../agents/orchestrator';
@@ -11,8 +11,9 @@ export const agentRoutes = Router();
 
 /**
  * POST /api/run-agents
- * Launch parallel TinyFish agents for a company
- * Returns SSE stream with real-time updates
+ * Launch parallel TinyFish agents for a company.
+ * Returns SSE stream with real-time updates.
+ * After agents complete: stores signals, generates report, sends email.
  */
 agentRoutes.post('/run-agents', async (req: Request, res: Response) => {
   try {
@@ -44,7 +45,7 @@ agentRoutes.post('/run-agents', async (req: Request, res: Response) => {
     // Run all intelligence agents in parallel with SSE streaming
     const findings = await runIntelligenceAgents(company, res);
 
-    // Store collected signals (fire and forget — don't block report generation)
+    // Store collected signals (fire and forget)
     storeSignals(company.company_id, findings).catch((err) =>
       console.error('[Signals] Store failed:', err),
     );
@@ -52,7 +53,7 @@ agentRoutes.post('/run-agents', async (req: Request, res: Response) => {
     // Update last run timestamp
     await updateLastAgentRun(company.company_id);
 
-    // Generate report directly from findings (not DB round-trip)
+    // Generate report directly from findings
     const reportData = generateReportFromFindings(company, findings);
     const report = await storeReport(company.company_id, reportData);
 
@@ -64,6 +65,17 @@ agentRoutes.post('/run-agents', async (req: Request, res: Response) => {
         total_signals: findings.length,
       },
     });
+
+    // Send email report
+    const settings = await getUserSettings();
+    let emailSent = false;
+    if (settings.email) {
+      emailSent = await sendReportEmail(settings.email, company, reportData);
+      sendSSE(res, {
+        type: 'email_sent',
+        data: { success: emailSent, email: settings.email },
+      });
+    }
 
     sendSSE(res, {
       type: 'pipeline_complete',
@@ -82,47 +94,6 @@ agentRoutes.post('/run-agents', async (req: Request, res: Response) => {
       sendSSE(res, { type: 'pipeline_error', data: { error: message } });
       endSSE(res);
     }
-  }
-});
-
-/**
- * POST /api/send-report-email
- * Separate endpoint for email sending — called by the extension after report is generated.
- * This avoids Vercel's serverless timeout killing the email step in the SSE pipeline.
- */
-agentRoutes.post('/send-report-email', async (req: Request, res: Response) => {
-  try {
-    const { company_id, report_id } = req.body;
-
-    if (!company_id || !report_id) {
-      res.status(400).json({ error: 'company_id and report_id are required' });
-      return;
-    }
-
-    const settings = await getUserSettings();
-    if (!settings.email) {
-      res.json({ success: false, reason: 'No email configured' });
-      return;
-    }
-
-    const company = await getCompanyById(company_id);
-    if (!company) {
-      res.status(404).json({ error: 'Company not found' });
-      return;
-    }
-
-    const report = await getReportById(report_id);
-    if (!report) {
-      res.status(404).json({ error: 'Report not found' });
-      return;
-    }
-
-    const sent = await sendReportEmail(settings.email, company, report.report_data);
-    res.json({ success: sent, email: settings.email });
-  } catch (err) {
-    const message = err instanceof Error ? err.message : 'Unknown error';
-    console.error('[Email] Send report email failed:', err);
-    res.status(500).json({ error: message });
   }
 });
 
