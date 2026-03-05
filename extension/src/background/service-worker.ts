@@ -3,8 +3,8 @@
  * Handles SSE streaming for agent runs so they persist across popup open/close cycles.
  * State is stored in chrome.storage.local and the popup reads from it.
  *
- * Companies are queued and processed ONE AT A TIME so each company gets
- * TinyFish's full concurrency capacity (all 10 agents run simultaneously).
+ * Every company runs independently and in parallel — all agents launch immediately.
+ * Each company's report and email are sent only when THAT company's pipeline finishes.
  *
  * Uses chrome.alarms as a fallback timeout — if the SSE stream drops
  * (e.g. service worker killed by Chrome), the alarm force-completes stale agents.
@@ -34,7 +34,6 @@ interface StoredRun {
   liveReport: Record<string, unknown> | null;
   emailSent?: boolean;
   startedAt?: number;
-  queued?: boolean; // true if waiting in queue, false/undefined if actively running
 }
 
 // ---- Storage mutex ----
@@ -151,21 +150,14 @@ async function readSSE(
   }
 }
 
-// ---- Run queue ----
-// Companies are processed one at a time so each gets TinyFish's full capacity
+// ---- Start agent run (fire-and-forget, runs in parallel) ----
 
-const runQueue: Array<{ companyId: string; companyName: string }> = [];
-let isProcessingQueue = false;
-
-async function enqueueRun(companyId: string, companyName: string): Promise<void> {
-  // Check for duplicate (already running or queued)
+async function startAgentRun(companyId: string, companyName: string): Promise<void> {
+  // Skip if already running
   const runs = await getActiveRuns();
   if (runs.some((r) => r.companyId === companyId && !r.isComplete)) return;
 
-  // Check if already in queue
-  if (runQueue.some((q) => q.companyId === companyId)) return;
-
-  // Add to storage as queued (so UI shows it's waiting)
+  // Add to storage immediately
   await withLock(async () => {
     const current = await getActiveRuns();
     const newRun: StoredRun = {
@@ -175,35 +167,11 @@ async function enqueueRun(companyId: string, companyName: string): Promise<void>
       isComplete: false,
       liveReport: null,
       startedAt: Date.now(),
-      queued: true,
     };
     await saveActiveRuns([...current, newRun]);
   });
 
-  runQueue.push({ companyId, companyName });
-  processQueue();
-}
-
-async function processQueue(): Promise<void> {
-  if (isProcessingQueue) return;
-  isProcessingQueue = true;
-
-  while (runQueue.length > 0) {
-    const next = runQueue.shift()!;
-    console.log(`[SW] Starting run for ${next.companyName} (${runQueue.length} remaining in queue)`);
-
-    // Mark as no longer queued
-    await updateStoredRun(next.companyId, { queued: false });
-
-    await executeAgentRun(next.companyId, next.companyName);
-  }
-
-  isProcessingQueue = false;
-}
-
-// ---- Agent run execution (single company) ----
-
-async function executeAgentRun(companyId: string, companyName: string): Promise<void> {
+  // Set timeout alarm
   chrome.alarms.create(`run-timeout-${companyId}`, { delayInMinutes: RUN_TIMEOUT_MINUTES });
 
   try {
@@ -255,10 +223,6 @@ async function executeAgentRun(companyId: string, companyName: string): Promise<
 // ---- Dismiss ----
 
 function dismissRun(companyId: string): Promise<void> {
-  // Also remove from queue if queued
-  const idx = runQueue.findIndex((q) => q.companyId === companyId);
-  if (idx >= 0) runQueue.splice(idx, 1);
-
   return withLock(async () => {
     const runs = await getActiveRuns();
     await saveActiveRuns(runs.filter((r) => r.companyId !== companyId));
@@ -301,7 +265,8 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   }
 
   if (message.type === 'START_RUN') {
-    enqueueRun(message.companyId, message.companyName);
+    // Fire-and-forget — each company runs independently in parallel
+    startAgentRun(message.companyId, message.companyName);
     sendResponse({ ok: true });
     return false;
   }
