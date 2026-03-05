@@ -18,6 +18,7 @@ export interface ActiveRun {
   isComplete: boolean;
   liveReport: ReportData | null;
   emailSent?: boolean;
+  queued?: boolean;
 }
 
 export interface AgentState {

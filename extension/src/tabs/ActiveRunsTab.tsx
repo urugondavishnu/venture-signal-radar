@@ -62,15 +62,17 @@ export function ActiveRunsTab({ activeRuns, onDismiss }: ActiveRunsTabProps) {
                 gap: 6,
               }}
             >
-              {!run.isComplete && (
+              {!run.isComplete && !run.queued && (
                 <span className="status-dot browsing" style={{ width: 6, height: 6 }} />
               )}
               {run.companyName}
-              {totalAgents > 0 && (
+              {run.queued ? (
+                <span style={{ opacity: 0.7, fontStyle: 'italic' }}>Queued</span>
+              ) : totalAgents > 0 ? (
                 <span style={{ opacity: 0.7 }}>
                   {completedAgents}/{totalAgents}
                 </span>
-              )}
+              ) : null}
             </button>
           );
         })}
@@ -162,7 +164,9 @@ export function ActiveRunsTab({ activeRuns, onDismiss }: ActiveRunsTabProps) {
           {selectedRun.agents.length === 0 && !selectedRun.isComplete && (
             <div className="empty-state" style={{ padding: 20 }}>
               <span className="spinner" style={{ fontSize: 20 }}>&#8635;</span>
-              <p style={{ marginTop: 8 }}>Launching agents...</p>
+              <p style={{ marginTop: 8 }}>
+                {selectedRun.queued ? 'Queued — waiting for other runs to finish...' : 'Launching agents...'}
+              </p>
             </div>
           )}
 
