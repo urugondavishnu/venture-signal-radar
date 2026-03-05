@@ -68,13 +68,16 @@ agentRoutes.post('/run-agents', async (req: Request, res: Response) => {
 
     // Send email report
     const settings = await getUserSettings();
-    let emailSent = false;
     if (settings.email) {
-      emailSent = await sendReportEmail(settings.email, company, reportData);
+      console.log(`[Pipeline] Sending email for ${company.company_name} to ${settings.email}...`);
+      const emailSent = await sendReportEmail(settings.email, company, reportData);
+      console.log(`[Pipeline] Email result for ${company.company_name}: ${emailSent}`);
       sendSSE(res, {
         type: 'email_sent',
         data: { success: emailSent, email: settings.email },
       });
+    } else {
+      console.log(`[Pipeline] No email configured, skipping email for ${company.company_name}`);
     }
 
     sendSSE(res, {

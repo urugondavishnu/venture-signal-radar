@@ -33,6 +33,25 @@ interface StoredRun {
   startedAt?: number;
 }
 
+// ---- Storage mutex ----
+// Prevents concurrent read-modify-write races when multiple SSE streams update storage
+
+let storageLock: Promise<void> = Promise.resolve();
+
+function withLock<T>(fn: () => Promise<T>): Promise<T> {
+  let release: () => void;
+  const next = new Promise<void>((r) => { release = r; });
+  const prev = storageLock;
+  storageLock = next;
+  return prev.then(async () => {
+    try {
+      return await fn();
+    } finally {
+      release!();
+    }
+  });
+}
+
 // ---- Storage helpers ----
 
 async function getActiveRuns(): Promise<StoredRun[]> {
@@ -44,44 +63,53 @@ async function saveActiveRuns(runs: StoredRun[]): Promise<void> {
   await chrome.storage.local.set({ activeRuns: runs });
 }
 
-async function updateStoredRun(companyId: string, updates: Partial<StoredRun>): Promise<void> {
-  const runs = await getActiveRuns();
-  const updated = runs.map((r) =>
-    r.companyId === companyId ? { ...r, ...updates } : r,
-  );
-  await saveActiveRuns(updated);
+function updateStoredRun(companyId: string, updates: Partial<StoredRun>): Promise<void> {
+  return withLock(async () => {
+    const runs = await getActiveRuns();
+    const updated = runs.map((r) =>
+      r.companyId === companyId ? { ...r, ...updates } : r,
+    );
+    await saveActiveRuns(updated);
+  });
 }
 
-async function updateAgentInStoredRun(companyId: string, agentData: StoredAgentState): Promise<void> {
-  const runs = await getActiveRuns();
-  const updated = runs.map((r) => {
-    if (r.companyId !== companyId) return r;
-    const idx = r.agents.findIndex((a) => a.agentId === agentData.agentId);
-    const agents =
-      idx >= 0
-        ? r.agents.map((a) => (a.agentId === agentData.agentId ? { ...a, ...agentData } : a))
-        : [...r.agents, agentData];
-    return { ...r, agents };
+function updateAgentInStoredRun(companyId: string, agentData: StoredAgentState): Promise<void> {
+  return withLock(async () => {
+    const runs = await getActiveRuns();
+    const updated = runs.map((r) => {
+      if (r.companyId !== companyId) return r;
+      const idx = r.agents.findIndex((a) => a.agentId === agentData.agentId);
+      const agents =
+        idx >= 0
+          ? r.agents.map((a) => (a.agentId === agentData.agentId ? { ...a, ...agentData } : a))
+          : [...r.agents, agentData];
+      return { ...r, agents };
+    });
+    await saveActiveRuns(updated);
   });
-  await saveActiveRuns(updated);
 }
 
 // ---- Force-complete stale runs ----
 
-async function forceCompleteRun(companyId: string): Promise<void> {
-  const runs = await getActiveRuns();
-  const run = runs.find((r) => r.companyId === companyId);
-  if (!run || run.isComplete) return;
+function forceCompleteRun(companyId: string): Promise<void> {
+  return withLock(async () => {
+    const runs = await getActiveRuns();
+    const run = runs.find((r) => r.companyId === companyId);
+    if (!run || run.isComplete) return;
 
-  console.log(`[SW] Force-completing run for ${run.companyName} (timeout)`);
+    console.log(`[SW] Force-completing run for ${run.companyName} (timeout)`);
 
-  const updatedAgents = run.agents.map((a) =>
-    a.status !== 'complete' && a.status !== 'error'
-      ? { ...a, status: 'complete' as const, findings: { signals: [] }, message: '0 results found' }
-      : a,
-  );
+    const updatedAgents = run.agents.map((a) =>
+      a.status !== 'complete' && a.status !== 'error'
+        ? { ...a, status: 'complete' as const, findings: { signals: [] }, message: '0 results found' }
+        : a,
+    );
 
-  await updateStoredRun(companyId, { agents: updatedAgents, isComplete: true });
+    const updated = runs.map((r) =>
+      r.companyId === companyId ? { ...r, agents: updatedAgents, isComplete: true } : r,
+    );
+    await saveActiveRuns(updated);
+  });
 }
 
 // ---- SSE stream reader ----
@@ -123,20 +151,24 @@ async function readSSE(
 // ---- Agent run management ----
 
 async function startAgentRun(companyId: string, companyName: string): Promise<void> {
-  const runs = await getActiveRuns();
+  // Use lock to safely check and add the new run
+  const shouldStart = await withLock(async () => {
+    const runs = await getActiveRuns();
+    if (runs.some((r) => r.companyId === companyId && !r.isComplete)) return false;
 
-  // Don't start duplicate runs
-  if (runs.some((r) => r.companyId === companyId && !r.isComplete)) return;
+    const newRun: StoredRun = {
+      companyId,
+      companyName,
+      agents: [],
+      isComplete: false,
+      liveReport: null,
+      startedAt: Date.now(),
+    };
+    await saveActiveRuns([...runs, newRun]);
+    return true;
+  });
 
-  const newRun: StoredRun = {
-    companyId,
-    companyName,
-    agents: [],
-    isComplete: false,
-    liveReport: null,
-    startedAt: Date.now(),
-  };
-  await saveActiveRuns([...runs, newRun]);
+  if (!shouldStart) return;
 
   // Set a fallback alarm to force-complete this run if the SSE stream drops
   chrome.alarms.create(`run-timeout-${companyId}`, { delayInMinutes: RUN_TIMEOUT_MINUTES });
@@ -187,10 +219,12 @@ async function startAgentRun(companyId: string, companyName: string): Promise<vo
   }
 }
 
-async function dismissRun(companyId: string): Promise<void> {
-  const runs = await getActiveRuns();
-  await saveActiveRuns(runs.filter((r) => r.companyId !== companyId));
-  chrome.alarms.clear(`run-timeout-${companyId}`);
+function dismissRun(companyId: string): Promise<void> {
+  return withLock(async () => {
+    const runs = await getActiveRuns();
+    await saveActiveRuns(runs.filter((r) => r.companyId !== companyId));
+    chrome.alarms.clear(`run-timeout-${companyId}`);
+  });
 }
 
 // ---- Extension lifecycle ----

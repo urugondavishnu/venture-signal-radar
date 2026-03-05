@@ -88,25 +88,23 @@ export function ReportsTab({ activeRuns }: ReportsTabProps) {
     loadReports();
   }, []);
 
-  // Reload stored reports when a run transitions to complete
+  // Reload stored reports when any run transitions to complete
   useEffect(() => {
     const completedIds = new Set(activeRuns.filter((r) => r.isComplete).map((r) => r.companyId));
     const prevCompleted = prevCompletedRef.current;
 
-    // Check if any new run just completed
-    let hasNewCompletion = false;
+    let newCompletions = 0;
     for (const id of completedIds) {
-      if (!prevCompleted.has(id)) {
-        hasNewCompletion = true;
-        break;
-      }
+      if (!prevCompleted.has(id)) newCompletions++;
     }
 
     prevCompletedRef.current = completedIds;
 
-    if (hasNewCompletion) {
-      // Delay slightly so the backend has time to store
-      setTimeout(loadReports, 2000);
+    if (newCompletions > 0) {
+      // Staggered reloads to catch all reports being stored
+      const t1 = setTimeout(loadReports, 2000);
+      const t2 = setTimeout(loadReports, 6000);
+      return () => { clearTimeout(t1); clearTimeout(t2); };
     }
   }, [activeRuns]);
 
