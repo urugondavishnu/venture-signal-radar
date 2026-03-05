@@ -92,6 +92,20 @@ export async function storeReport(
 }
 
 /**
+ * Get a single report by ID
+ */
+export async function getReportById(reportId: string): Promise<Report | null> {
+  const { data, error } = await supabase
+    .from('reports')
+    .select('*')
+    .eq('report_id', reportId)
+    .single();
+
+  if (error) return null;
+  return data as Report;
+}
+
+/**
  * Get reports for a company
  */
 export async function getReports(companyId: string): Promise<Report[]> {

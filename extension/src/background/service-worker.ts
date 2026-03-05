@@ -7,7 +7,7 @@
  * (e.g. service worker killed by Chrome), the alarm force-completes stale agents.
  */
 
-const API_BASE = 'http://localhost:3001/api';
+const API_BASE = 'https://backend-beta-sage-41.vercel.app/api';
 const RUN_TIMEOUT_MINUTES = 5.5; // Slightly longer than backend's 5-min agent timeout
 
 // ---- Types (duplicated here to avoid import issues in service worker bundle) ----
@@ -83,6 +83,23 @@ async function forceCompleteRun(companyId: string): Promise<void> {
   );
 
   await updateStoredRun(companyId, { agents: updatedAgents, isComplete: true });
+}
+
+// ---- Email sending (separate request to avoid serverless timeout) ----
+
+async function sendReportEmail(companyId: string, reportId: string): Promise<boolean> {
+  try {
+    const response = await fetch(`${API_BASE}/send-report-email`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ company_id: companyId, report_id: reportId }),
+    });
+    const result = await response.json();
+    return result.success === true;
+  } catch (err) {
+    console.error('[SW] Email send failed:', err);
+    return false;
+  }
 }
 
 // ---- SSE stream reader ----
@@ -163,9 +180,10 @@ async function startAgentRun(companyId: string, companyName: string): Promise<vo
           break;
         case 'report_generated':
           await updateStoredRun(companyId, { liveReport: data.report_data as Record<string, unknown> });
-          break;
-        case 'email_sent':
-          await updateStoredRun(companyId, { emailSent: (data as Record<string, unknown>).success as boolean });
+          // Send email via separate endpoint (avoids serverless timeout)
+          sendReportEmail(companyId, data.report_id as string).then((sent: boolean) => {
+            updateStoredRun(companyId, { emailSent: sent });
+          });
           break;
         case 'pipeline_complete':
           await updateStoredRun(companyId, { isComplete: true });
