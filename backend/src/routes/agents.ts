@@ -38,6 +38,11 @@ agentRoutes.post('/run-agents', requireAuth, async (req: Request, res: Response)
     // Initialize SSE stream
     initSSE(res);
 
+    // Send keepalive every 15s to prevent Render proxy from killing idle connections
+    const heartbeat = setInterval(() => {
+      try { res.write(': keepalive\n\n'); } catch { /* client disconnected */ }
+    }, 15_000);
+
     sendSSE(res, {
       type: 'pipeline_started',
       data: {
@@ -47,52 +52,63 @@ agentRoutes.post('/run-agents', requireAuth, async (req: Request, res: Response)
       },
     });
 
-    // Run all intelligence agents in parallel with SSE streaming
-    const findings = await runIntelligenceAgents(company, res);
+    let findings: Awaited<ReturnType<typeof runIntelligenceAgents>> = [];
+    try {
+      // Run all intelligence agents in parallel with SSE streaming
+      findings = await runIntelligenceAgents(company, res);
 
-    // Store collected signals (fire and forget)
-    storeSignals(company.company_id, findings).catch((err) =>
-      console.error('[Signals] Store failed:', err),
-    );
+      // Store collected signals (fire and forget)
+      storeSignals(company.company_id, findings).catch((err) =>
+        console.error('[Signals] Store failed:', err),
+      );
 
-    // Update last run timestamp
-    await updateLastAgentRun(company.company_id);
+      // Update last run timestamp
+      await updateLastAgentRun(company.company_id);
 
-    // Generate report directly from findings
-    const reportData = generateReportFromFindings(company, findings);
-    const report = await storeReport(company.company_id, reportData, userId);
+      // Generate report directly from findings
+      const reportData = generateReportFromFindings(company, findings);
+      const report = await storeReport(company.company_id, reportData, userId);
 
-    sendSSE(res, {
-      type: 'report_generated',
-      data: {
-        report_id: report.report_id,
-        report_data: reportData,
-        total_signals: findings.length,
-      },
-    });
-
-    // Send email report using auth user's email
-    const settings = await getUserSettings(userId);
-    const emailTo = settings.email || userEmail;
-    if (emailTo) {
-      console.log(`[Pipeline] Sending email for ${company.company_name} to ${emailTo}...`);
-      const emailSent = await sendReportEmail(emailTo, company, reportData);
-      console.log(`[Pipeline] Email result for ${company.company_name}: ${emailSent}`);
       sendSSE(res, {
-        type: 'email_sent',
-        data: { success: emailSent, email: emailTo },
+        type: 'report_generated',
+        data: {
+          report_id: report.report_id,
+          report_data: reportData,
+          total_signals: findings.length,
+        },
       });
+
+      // Send email report using auth user's email
+      try {
+        const settings = await getUserSettings(userId);
+        const emailTo = settings.email || userEmail;
+        if (emailTo) {
+          console.log(`[Pipeline] Sending email for ${company.company_name} to ${emailTo}...`);
+          const emailSent = await sendReportEmail(emailTo, company, reportData);
+          console.log(`[Pipeline] Email result for ${company.company_name}: ${emailSent}`);
+          sendSSE(res, {
+            type: 'email_sent',
+            data: { success: emailSent, email: emailTo },
+          });
+        }
+      } catch (emailErr) {
+        console.error(`[Pipeline] Email failed for ${company.company_name}:`, emailErr);
+        sendSSE(res, { type: 'email_sent', data: { success: false } });
+      }
+    } finally {
+      // Always send pipeline_complete and clean up, even if something above throws
+      clearInterval(heartbeat);
+
+      sendSSE(res, {
+        type: 'pipeline_complete',
+        data: {
+          message: `All agents completed. ${findings.length} signals found.`,
+          totalSignals: findings.length,
+        },
+      });
+
+      endSSE(res);
     }
-
-    sendSSE(res, {
-      type: 'pipeline_complete',
-      data: {
-        message: `All agents completed. ${findings.length} signals found.`,
-        totalSignals: findings.length,
-      },
-    });
-
-    endSSE(res);
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Unknown error';
     if (!res.headersSent) {

@@ -220,6 +220,8 @@ export function runAgentsSSE(
   return controller;
 }
 
+const SSE_STALE_TIMEOUT = 90_000; // 90s with no data = dead connection
+
 async function readSSE(
   response: Response,
   onEvent: (event: { type: string; data: unknown }) => void,
@@ -229,23 +231,38 @@ async function readSSE(
 
   const decoder = new TextDecoder();
   let buffer = '';
+  let staleTimer: ReturnType<typeof setTimeout> | undefined;
 
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
+  const resetStaleTimer = () => {
+    clearTimeout(staleTimer);
+    staleTimer = setTimeout(() => {
+      reader.cancel().catch(() => {});
+    }, SSE_STALE_TIMEOUT);
+  };
 
-    buffer += decoder.decode(value, { stream: true });
-    const lines = buffer.split('\n');
-    buffer = lines.pop() || '';
+  resetStaleTimer();
 
-    for (const line of lines) {
-      if (!line.startsWith('data: ')) continue;
-      try {
-        const parsed = JSON.parse(line.slice(6));
-        onEvent(parsed);
-      } catch {
-        // skip malformed
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      resetStaleTimer();
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop() || '';
+
+      for (const line of lines) {
+        if (!line.startsWith('data: ')) continue;
+        try {
+          const parsed = JSON.parse(line.slice(6));
+          onEvent(parsed);
+        } catch {
+          // skip malformed
+        }
       }
     }
+  } finally {
+    clearTimeout(staleTimer);
   }
 }
