@@ -4,7 +4,7 @@
  */
 
 const TINYFISH_API_URL = 'https://agent.tinyfish.ai/v1/automation/run-sse';
-const AGENT_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes per agent
+const AGENT_TIMEOUT_MS = 8 * 60 * 1000; // 8 minutes per agent
 
 export interface TinyfishCallbacks {
   onConnecting: () => void;

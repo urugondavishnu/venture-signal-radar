@@ -5,21 +5,6 @@
 
 import { Response } from 'express';
 import { startTinyfishAgent, TinyfishCallbacks } from './tinyfish-client';
-
-const ORCHESTRATOR_AGENT_TIMEOUT_MS = 5.5 * 60 * 1000; // 5.5 min hard cutoff per agent
-
-function withTimeout<T>(promise: Promise<T>, ms: number, onTimeout: () => void): Promise<T> {
-  return Promise.race([
-    promise,
-    new Promise<T>((_resolve, reject) => {
-      setTimeout(() => {
-        onTimeout();
-        reject(new Error('Agent timed out'));
-      }, ms);
-    }),
-  ]);
-}
-
 import {
   buildBlogScannerGoal,
   buildNewsScannerGoal,
@@ -158,7 +143,7 @@ export async function runIntelligenceAgents(
   const allFindings: SignalFinding[] = [];
 
   const agentPromises = agents.map((agent) => {
-    const agentPromise = new Promise<void>((resolve) => {
+    return new Promise<void>((resolve) => {
       const callbacks: TinyfishCallbacks = {
         onConnecting: () => {
           sendSSE(res, {
@@ -246,21 +231,6 @@ export async function runIntelligenceAgents(
 
       startTinyfishAgent({ url: agent.url, goal: agent.goal }, callbacks);
     });
-
-    // Hard timeout: if the TinyFish client's abort doesn't work, force-complete the agent
-    return withTimeout(agentPromise, ORCHESTRATOR_AGENT_TIMEOUT_MS, () => {
-      sendSSE(res, {
-        type: 'agent_complete',
-        data: {
-          agentId: agent.id,
-          agentType: agent.type,
-          agentName: agent.name,
-          status: 'complete',
-          findings: { signals: [] },
-          message: 'Timed out after 5 minutes',
-        },
-      });
-    }).catch(() => {}); // swallow timeout rejection — agent is force-completed
   });
 
   await Promise.allSettled(agentPromises);
@@ -379,7 +349,7 @@ export async function runIntelligenceAgentsSilent(
   const allFindings: SignalFinding[] = [];
 
   const agentPromises = agents.map((agent) => {
-    const agentPromise = new Promise<void>((resolve) => {
+    return new Promise<void>((resolve) => {
       const callbacks: TinyfishCallbacks = {
         onConnecting: () => {},
         onBrowsing: () => {},
@@ -398,10 +368,6 @@ export async function runIntelligenceAgentsSilent(
 
       startTinyfishAgent({ url: agent.url, goal: agent.goal }, callbacks);
     });
-
-    return withTimeout(agentPromise, ORCHESTRATOR_AGENT_TIMEOUT_MS, () => {
-      console.log(`[Scheduler] Agent ${agent.id} timed out after 5.5 min`);
-    }).catch(() => {});
   });
 
   await Promise.allSettled(agentPromises);
