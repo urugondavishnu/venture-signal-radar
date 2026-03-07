@@ -38,7 +38,8 @@ app.use('/api', userRoutes);
 // Serve web app static files (built app)
 const appDist = path.join(__dirname, '../../app/dist');
 app.use(express.static(appDist));
-app.get('*', (_req, res) => {
+app.get('*', (_req, res, next) => {
+  if (_req.path.startsWith('/api/')) return next();
   res.sendFile(path.join(appDist, 'index.html'));
 });
 

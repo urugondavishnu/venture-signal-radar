@@ -1,0 +1,22 @@
+services:
+  - type: web
+    name: venture-signal-radar
+    runtime: node
+    plan: free
+    buildCommand: cd app && npm install && npm run build && cd ../backend && npm install && npm run build
+    startCommand: cd backend && node dist/index.js
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_SERVICE_KEY
+        sync: false
+      - key: TINYFISH_API_KEY
+        sync: false
+      - key: BREVO_USER
+        sync: false
+      - key: BREVO_SMTP_KEY
+        sync: false
+      - key: BREVO_FROM_EMAIL
+        sync: false
