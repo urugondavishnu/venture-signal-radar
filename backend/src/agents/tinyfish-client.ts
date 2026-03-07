@@ -3,19 +3,8 @@
  * Handles SSE communication with TinyFish agent platform
  */
 
-import { Agent, fetch as undiciFetch } from 'undici';
-
 const TINYFISH_API_URL = 'https://agent.tinyfish.ai/v1/automation/run-sse';
-const AGENT_TIMEOUT_MS = 8 * 60 * 1000; // 8 minutes per agent
-
-// Unlimited concurrent connections to TinyFish — no HTTP-level throttling
-const tinyfishDispatcher = new Agent({
-  connections: null,       // no limit on concurrent connections
-  pipelining: 1,
-  keepAliveTimeout: 10 * 60 * 1000,  // keep SSE connections alive for 10 min
-  bodyTimeout: 0,          // no timeout on response body (SSE streams are long-lived)
-  headersTimeout: 30_000,  // 30s to receive response headers
-});
+const AGENT_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes per agent
 
 export interface TinyfishCallbacks {
   onConnecting: () => void;
@@ -46,31 +35,15 @@ export function startTinyfishAgent(
     return controller;
   }
 
-  // Accumulate information collected during the agent's browsing session.
-  // If timeout fires before COMPLETE, we return whatever was gathered.
-  const collectedSteps: string[] = [];
-  let completedNormally = false;
-
   const timeout = setTimeout(() => {
     controller.abort();
-    if (!completedNormally) {
-      // Build partial result from accumulated browsing steps
-      const signals: Array<{ signal_type: string; title: string; summary: string; source: string }> = [];
-      if (collectedSteps.length > 0) {
-        signals.push({
-          signal_type: 'partial_collection',
-          title: `Partial data collected (timed out after 8 min)`,
-          summary: collectedSteps.slice(-10).join(' | '),
-          source: 'agent_timeout',
-        });
-      }
-      callbacks.onComplete({ signals });
-    }
+    // On timeout, treat as complete with 0 results instead of showing an error
+    callbacks.onComplete({ signals: [] });
   }, AGENT_TIMEOUT_MS);
 
   callbacks.onConnecting();
 
-  undiciFetch(TINYFISH_API_URL, {
+  fetch(TINYFISH_API_URL, {
     method: 'POST',
     headers: {
       'X-API-Key': apiKey,
@@ -81,7 +54,6 @@ export function startTinyfishAgent(
       goal: config.goal,
     }),
     signal: controller.signal,
-    dispatcher: tinyfishDispatcher,
   })
     .then(async (response) => {
       if (!response.ok) {
@@ -116,11 +88,10 @@ export function startTinyfishAgent(
               callbacks.onBrowsing('Agent is browsing the website...');
             }
 
-            // Step / status updates — accumulate for partial results on timeout
+            // Step / status updates
             if (data.type === 'STEP' || data.purpose || data.action) {
               const message =
                 data.message || data.purpose || data.action || 'Processing...';
-              collectedSteps.push(message);
               callbacks.onStatus(message);
             }
 
@@ -129,7 +100,6 @@ export function startTinyfishAgent(
               (data.type === 'COMPLETE' || data.status === 'COMPLETED') &&
               data.resultJson
             ) {
-              completedNormally = true;
               let result: unknown;
               try {
                 result =

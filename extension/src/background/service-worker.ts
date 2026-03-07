@@ -11,7 +11,7 @@
  */
 
 const API_BASE = 'https://venture-signal-radar.onrender.com/api';
-const RUN_TIMEOUT_MINUTES = 8.5; // Slightly longer than backend's 8-min agent timeout
+const RUN_TIMEOUT_MINUTES = 5.5; // Slightly longer than backend's 5-min agent timeout
 
 // ---- Types ----
 
