@@ -1,22 +1,4 @@
-import nodemailer from 'nodemailer';
 import { ReportData, Company } from '../types';
-
-let transporter: nodemailer.Transporter | null = null;
-
-function getTransporter(): nodemailer.Transporter {
-  if (!transporter) {
-    const user = process.env.BREVO_USER;
-    const pass = process.env.BREVO_SMTP_KEY;
-    if (!user || !pass) throw new Error('BREVO_USER and BREVO_SMTP_KEY must be configured');
-    transporter = nodemailer.createTransport({
-      host: 'smtp-relay.brevo.com',
-      port: 587,
-      secure: false,
-      auth: { user, pass },
-    });
-  }
-  return transporter;
-}
 
 /**
  * Escape a value for CSV (handles commas, quotes, newlines)
@@ -163,8 +145,11 @@ export async function sendReportEmail(
   report: ReportData,
 ): Promise<boolean> {
   try {
-    const transport = getTransporter();
+    const apiKey = process.env.BREVO_API_KEY;
+    if (!apiKey) throw new Error('BREVO_API_KEY must be configured');
+
     const fromEmail = process.env.BREVO_FROM_EMAIL || 'signals@venture-signal-radar.com';
+    const fromName = 'Venture Signal Radar';
     const html = buildReportEmail(company, report);
     const csv = buildReportCSV(report);
 
@@ -185,19 +170,33 @@ export async function sendReportEmail(
     const safeCompanyName = company.company_name.replace(/[^a-zA-Z0-9_-]/g, '_');
     const fileDate = now.toISOString().slice(0, 10);
 
-    const result = await transport.sendMail({
-      from: fromEmail,
-      to: toEmail,
-      subject,
-      html,
-      attachments: [
-        {
-          filename: `${safeCompanyName}_report_${fileDate}.csv`,
-          content: csv,
-        },
-      ],
+    const res = await fetch('https://api.brevo.com/v3/smtp/email', {
+      method: 'POST',
+      headers: {
+        'api-key': apiKey,
+        'Content-Type': 'application/json',
+        Accept: 'application/json',
+      },
+      body: JSON.stringify({
+        sender: { name: fromName, email: fromEmail },
+        to: [{ email: toEmail }],
+        subject,
+        htmlContent: html,
+        attachment: [
+          {
+            name: `${safeCompanyName}_report_${fileDate}.csv`,
+            content: Buffer.from(csv).toString('base64'),
+          },
+        ],
+      }),
     });
 
+    if (!res.ok) {
+      const err = await res.text();
+      throw new Error(`Brevo API ${res.status}: ${err}`);
+    }
+
+    const result = await res.json() as { messageId?: string };
     console.log(`[Email] Report sent to ${toEmail} for ${company.company_name} (messageId: ${result.messageId})`);
     return true;
   } catch (err) {
