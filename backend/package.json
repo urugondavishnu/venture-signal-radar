@@ -4,7 +4,7 @@
   "private": true,
   "scripts": {
     "dev": "tsx watch src/index.ts",
-    "build": "tsc",
+    "build": "cd ../app && npm install && npm run build && cd ../backend && tsc",
     "start": "node dist/index.js"
   },
   "dependencies": {
