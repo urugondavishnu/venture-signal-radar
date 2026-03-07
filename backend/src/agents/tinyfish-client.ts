@@ -3,8 +3,19 @@
  * Handles SSE communication with TinyFish agent platform
  */
 
+import { Agent, fetch as undiciFetch } from 'undici';
+
 const TINYFISH_API_URL = 'https://agent.tinyfish.ai/v1/automation/run-sse';
 const AGENT_TIMEOUT_MS = 8 * 60 * 1000; // 8 minutes per agent
+
+// Unlimited concurrent connections to TinyFish — no HTTP-level throttling
+const tinyfishDispatcher = new Agent({
+  connections: null,       // no limit on concurrent connections
+  pipelining: 1,
+  keepAliveTimeout: 10 * 60 * 1000,  // keep SSE connections alive for 10 min
+  bodyTimeout: 0,          // no timeout on response body (SSE streams are long-lived)
+  headersTimeout: 30_000,  // 30s to receive response headers
+});
 
 export interface TinyfishCallbacks {
   onConnecting: () => void;
@@ -59,7 +70,7 @@ export function startTinyfishAgent(
 
   callbacks.onConnecting();
 
-  fetch(TINYFISH_API_URL, {
+  undiciFetch(TINYFISH_API_URL, {
     method: 'POST',
     headers: {
       'X-API-Key': apiKey,
@@ -70,6 +81,7 @@ export function startTinyfishAgent(
       goal: config.goal,
     }),
     signal: controller.signal,
+    dispatcher: tinyfishDispatcher,
   })
     .then(async (response) => {
       if (!response.ok) {
