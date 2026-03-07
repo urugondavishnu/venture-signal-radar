@@ -3,22 +3,22 @@ import { supabase } from '../db/supabase';
 import { extractDomain, normalizeUrl, extractCompanyName } from '../utils/domain';
 import { Company, DiscoveryResult } from '../types';
 
-const DEFAULT_USER_ID = '00000000-0000-0000-0000-000000000001';
-
 /**
  * Create or return existing company record
  */
 export async function storeCompany(
+  userId: string,
   websiteUrl: string,
   pageTitle?: string,
 ): Promise<Company> {
   const url = normalizeUrl(websiteUrl);
   const domain = extractDomain(url);
 
-  // Check if company already exists for this domain
+  // Check if company already exists for this user + domain
   const { data: existing } = await supabase
     .from('companies')
     .select('*')
+    .eq('user_id', userId)
     .eq('domain', domain)
     .single();
 
@@ -30,7 +30,7 @@ export async function storeCompany(
 
   const newCompany: Partial<Company> = {
     company_id: uuidv4(),
-    user_id: DEFAULT_USER_ID,
+    user_id: userId,
     company_name: companyName,
     website_url: url,
     domain,
@@ -84,12 +84,13 @@ export async function updateCompanyFromDiscovery(
 }
 
 /**
- * Get all tracked companies
+ * Get all tracked companies for a user
  */
-export async function getCompanies(): Promise<Company[]> {
+export async function getCompanies(userId: string): Promise<Company[]> {
   const { data, error } = await supabase
     .from('companies')
     .select('*')
+    .eq('user_id', userId)
     .eq('tracking_status', 'active')
     .order('created_at', { ascending: false });
 

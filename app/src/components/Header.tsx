@@ -1,8 +1,9 @@
 interface HeaderProps {
   email: string | null;
+  onSignOut: () => void;
 }
 
-export function Header({ email }: HeaderProps) {
+export function Header({ email, onSignOut }: HeaderProps) {
   return (
     <header className="header">
       <div className="header-left">
@@ -12,7 +13,12 @@ export function Header({ email }: HeaderProps) {
           <p className="header-subtitle">Startup Intelligence Platform</p>
         </div>
       </div>
-      {email && <span className="header-email">{email}</span>}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+        {email && <span className="header-email">{email}</span>}
+        <button className="btn btn-sm btn-secondary" onClick={onSignOut}>
+          Logout
+        </button>
+      </div>
     </header>
   );
 }

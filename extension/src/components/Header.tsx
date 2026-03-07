@@ -1,36 +1,24 @@
-export function Header() {
+interface HeaderProps {
+  email: string | null;
+  onSignOut: () => void;
+}
+
+export function Header({ email, onSignOut }: HeaderProps) {
   return (
-    <div
-      style={{
-        background: 'linear-gradient(135deg, #1e3a5f, #2563eb)',
-        padding: '14px 16px',
-        display: 'flex',
-        alignItems: 'center',
-        gap: '10px',
-      }}
-    >
-      <div
-        style={{
-          width: 28,
-          height: 28,
-          borderRadius: 6,
-          background: 'rgba(255,255,255,0.2)',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          fontSize: 14,
-        }}
-      >
-        &#9672;
-      </div>
-      <div>
-        <div style={{ fontSize: 15, fontWeight: 700, color: '#fff' }}>
-          Venture Signal Tracker
-        </div>
-        <div style={{ fontSize: 10, color: 'rgba(255,255,255,0.7)' }}>
-          Startup Intelligence Platform
+    <header className="header">
+      <div className="header-left">
+        <span className="header-icon">📡</span>
+        <div>
+          <h1 className="header-title">Venture Signal Radar</h1>
+          <p className="header-subtitle">Startup Intelligence Platform</p>
         </div>
       </div>
-    </div>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        {email && <span className="header-email">{email}</span>}
+        <button className="btn btn-sm btn-secondary" onClick={onSignOut}>
+          Logout
+        </button>
+      </div>
+    </header>
   );
 }

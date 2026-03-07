@@ -1,8 +1,8 @@
 import { useState, useEffect, useCallback } from 'react';
-import { getReports, Report, ReportData } from '../api/client';
+import { getReports, deleteReport, Report, ReportData } from '../api/client';
 
 interface ReportsTabProps {
-  triggerReload: number; // increment to trigger reload
+  triggerReload: number;
 }
 
 const SECTION_LABELS: { key: keyof ReportData; label: string }[] = [
@@ -24,6 +24,7 @@ export function ReportsTab({ triggerReload }: ReportsTabProps) {
   const [reports, setReports] = useState<Report[]>([]);
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
 
   const loadReports = useCallback(async () => {
     try {
@@ -39,6 +40,21 @@ export function ReportsTab({ triggerReload }: ReportsTabProps) {
   useEffect(() => {
     loadReports();
   }, [loadReports, triggerReload]);
+
+  const handleDelete = async (reportId: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (deletingId) return;
+    setDeletingId(reportId);
+    try {
+      await deleteReport(reportId);
+      setReports((prev) => prev.filter((r) => r.report_id !== reportId));
+      if (expandedId === reportId) setExpandedId(null);
+    } catch {
+      alert('Failed to delete report.');
+    } finally {
+      setDeletingId(null);
+    }
+  };
 
   if (loading) {
     return (
@@ -74,7 +90,7 @@ export function ReportsTab({ triggerReload }: ReportsTabProps) {
               className="report-card-header"
               onClick={() => setExpandedId(isExpanded ? null : report.report_id)}
             >
-              <div>
+              <div style={{ flex: 1 }}>
                 <div className="card-title">{rd.company_overview?.slice(0, 60) || 'Report'}</div>
                 <div className="card-subtitle">
                   {new Date(report.generated_at).toLocaleDateString('en-US', {
@@ -84,7 +100,16 @@ export function ReportsTab({ triggerReload }: ReportsTabProps) {
                   {totalSignals} signal{totalSignals !== 1 ? 's' : ''}
                 </div>
               </div>
-              <span className="expand-icon">{isExpanded ? '▲' : '▼'}</span>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <button
+                  className="btn btn-sm btn-danger"
+                  onClick={(e) => handleDelete(report.report_id, e)}
+                  disabled={deletingId === report.report_id}
+                >
+                  {deletingId === report.report_id ? '...' : 'Delete'}
+                </button>
+                <span className="expand-icon">{isExpanded ? '▲' : '▼'}</span>
+              </div>
             </div>
 
             {isExpanded && (

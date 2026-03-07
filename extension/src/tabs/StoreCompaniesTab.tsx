@@ -1,222 +1,204 @@
 import { useState, useEffect } from 'react';
-import { CompanyCard } from '../components/CompanyCard';
 import {
-  getCompanies,
-  storeCompany,
-  readSSEStream,
-  deleteCompany,
+  Company,
+  storeCompanySSE,
+  deleteCompany as apiDeleteCompany,
 } from '../api/client';
-import { ActiveRun } from '../popup/App';
 
-interface StoreCompaniesTabProps {
-  onStartRun: (companyId: string, companyName: string) => void;
-  activeRuns: ActiveRun[];
+interface CompaniesTabProps {
+  companies: Company[];
+  onCompanyAdded: () => void;
+  onRunCompany: (company: Company) => void;
+  activeRunIds: string[];
 }
 
-interface CompanyData {
-  company_id: string;
-  company_name: string;
-  website_url: string;
-  domain: string;
-  industry?: string | null;
-  description?: string | null;
-  last_agent_run?: string | null;
-}
+const MAX_COMPANIES = 5;
 
-const CACHE_KEY = 'cachedCompanies';
-
-export function StoreCompaniesTab({
-  onStartRun,
-  activeRuns,
-}: StoreCompaniesTabProps) {
-  const [companies, setCompanies] = useState<CompanyData[]>([]);
-  const [loading, setLoading] = useState(true);
+export function CompaniesTab({
+  companies,
+  onCompanyAdded,
+  onRunCompany,
+  activeRunIds,
+}: CompaniesTabProps) {
+  const [url, setUrl] = useState('');
   const [storing, setStoring] = useState(false);
-  const [urlInput, setUrlInput] = useState('');
-  const [discoveringIds, setDiscoveringIds] = useState<Set<string>>(new Set());
-  const [error, setError] = useState('');
+  const [storeMsg, setStoreMsg] = useState('');
+  const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
+  const [currentPageUrl, setCurrentPageUrl] = useState<string | null>(null);
+  const [currentPageTitle, setCurrentPageTitle] = useState<string>('');
 
-  // Derive running state from activeRuns (persisted across popup open/close)
-  const runningIds = new Set(
-    activeRuns.filter((r) => !r.isComplete).map((r) => r.companyId),
-  );
-
+  // Get current page info from chrome
   useEffect(() => {
-    // Load from cache first, then refresh from API
     try {
-      chrome.storage.local.get(CACHE_KEY, (result) => {
-        if (result[CACHE_KEY]?.length) {
-          setCompanies(result[CACHE_KEY]);
-          setLoading(false);
+      chrome.runtime.sendMessage({ type: 'GET_PAGE_INFO' }, (response) => {
+        if (response?.url && !response.url.startsWith('chrome://')) {
+          setCurrentPageUrl(response.url);
+          setCurrentPageTitle(response.title || '');
         }
-        // Then refresh from API
-        loadCompanies();
       });
     } catch {
-      loadCompanies();
+      // Not in extension context
     }
   }, []);
 
-  const loadCompanies = async () => {
-    try {
-      const { companies: data } = await getCompanies();
-      setCompanies(data || []);
-      // Update cache
-      try { chrome.storage.local.set({ [CACHE_KEY]: data || [] }); } catch {}
-    } catch {
-      // Backend offline — keep cached data
-    } finally {
-      setLoading(false);
-    }
-  };
+  const handleStore = (websiteUrl: string) => {
+    const trimmed = websiteUrl.trim();
+    if (!trimmed) return;
 
-  const storeCurrentPage = async () => {
+    if (companies.length >= MAX_COMPANIES) {
+      alert(`Maximum capacity is ${MAX_COMPANIES} companies. Please delete a company before adding another.`);
+      return;
+    }
+
+    let finalUrl = trimmed;
+    if (!finalUrl.startsWith('http')) finalUrl = `https://${finalUrl}`;
+
     setStoring(true);
-    setError('');
+    setStoreMsg('Storing company...');
 
-    try {
-      let url = '';
-      let title = '';
-
-      try {
-        const response: { url: string; title: string } = await new Promise((resolve) => {
-          chrome.runtime.sendMessage({ type: 'GET_PAGE_INFO' }, resolve);
-        });
-        url = response.url;
-        title = response.title;
-      } catch {
-        // Not in extension context
-      }
-
-      if (!url && urlInput) {
-        url = urlInput;
-      }
-
-      if (!url) {
-        setError('No URL detected. Enter a URL below or visit a company website.');
+    storeCompanySSE(
+      finalUrl,
+      (event) => {
+        if (event.type === 'company_stored') {
+          setStoreMsg('Company stored! Running discovery...');
+        }
+      },
+      () => {
         setStoring(false);
-        return;
-      }
+        setStoreMsg('');
+        setUrl('');
+        onCompanyAdded();
+      },
+      (err) => {
+        setStoring(false);
+        setStoreMsg(`Error: ${err}`);
+      },
+    );
+  };
 
-      const response = await storeCompany(url, title);
+  const handleFormSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    handleStore(url);
+  };
 
-      await readSSEStream(response, {
-        onEvent: (event) => {
-          if (event.type === 'company_stored') {
-            const companyData = event.data as unknown as CompanyData;
-            setCompanies((prev) => {
-              const exists = prev.find((c) => c.company_id === companyData.company_id);
-              if (exists) return prev;
-              const updated = [companyData, ...prev];
-              // Update cache
-              try { chrome.storage.local.set({ [CACHE_KEY]: updated }); } catch {}
-              return updated;
-            });
-            setDiscoveringIds((prev) => new Set(prev).add(companyData.company_id));
-            setStoring(false);
-          }
-        },
-        onError: (err) => setError(err),
-        onComplete: () => {
-          // Discovery runs in background on the server — refresh after a delay to pick up enriched data
-          setTimeout(() => {
-            loadCompanies().then(() => {
-              setDiscoveringIds(new Set());
-            });
-          }, 15000);
-        },
-      });
-
-      setUrlInput('');
-    } catch {
-      setError('Failed to store company. Is the backend running?');
-    } finally {
-      setStoring(false);
+  const handleStoreCurrentPage = () => {
+    if (currentPageUrl) {
+      handleStore(currentPageUrl);
     }
   };
 
-  const handleDeleteCompany = async (companyId: string) => {
+  const handleDelete = async (id: string) => {
     try {
-      await deleteCompany(companyId);
-      setCompanies((prev) => {
-        const updated = prev.filter((c) => c.company_id !== companyId);
-        try { chrome.storage.local.set({ [CACHE_KEY]: updated }); } catch {}
-        return updated;
-      });
+      await apiDeleteCompany(id);
+      setDeleteConfirm(null);
+      onCompanyAdded();
     } catch {
-      // Silent fail
+      alert('Failed to delete company.');
     }
-  };
-
-  const handleRunAgents = (companyId: string, companyName: string) => {
-    onStartRun(companyId, companyName);
   };
 
   return (
-    <div>
-      {/* Store Company Section */}
-      <div className="card" style={{ marginBottom: 12, borderColor: 'var(--accent)', borderStyle: 'dashed' }}>
-        <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 8 }}>
-          Bookmark a Company
-        </div>
-        <div style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
-          <input
-            className="input"
-            placeholder="Enter company URL (or click Store from their website)"
-            value={urlInput}
-            onChange={(e) => setUrlInput(e.target.value)}
-            onKeyDown={(e) => e.key === 'Enter' && storeCurrentPage()}
-          />
+    <div className="tab-panel">
+      {/* Store Current Page Button */}
+      {currentPageUrl && (
+        <div className="company-form" style={{ marginBottom: 10 }}>
           <button
             className="btn btn-primary"
-            onClick={storeCurrentPage}
+            style={{ width: '100%', justifyContent: 'center', padding: '10px 16px' }}
+            onClick={handleStoreCurrentPage}
             disabled={storing}
-            style={{ whiteSpace: 'nowrap' }}
           >
-            {storing ? (
-              <>
-                <span className="spinner">&#8635;</span> Storing...
-              </>
-            ) : (
-              'Store Company'
-            )}
+            {storing ? 'Storing...' : `Store This Page`}
+          </button>
+          <p className="form-hint" style={{ marginTop: 6, textAlign: 'center' }}>
+            {currentPageTitle || currentPageUrl}
+          </p>
+        </div>
+      )}
+
+      {/* Manual URL Form */}
+      <form onSubmit={handleFormSubmit} className="company-form">
+        <div className="form-row">
+          <input
+            type="text"
+            className="input"
+            placeholder="Or enter company URL (e.g. stripe.com)"
+            value={url}
+            onChange={(e) => setUrl(e.target.value)}
+            disabled={storing}
+          />
+          <button type="submit" className="btn btn-primary" disabled={storing || !url.trim()}>
+            {storing ? '...' : 'Store'}
           </button>
         </div>
-        {error && (
-          <div style={{ fontSize: 11, color: 'var(--error)' }}>{error}</div>
+        {storeMsg && (
+          <p className={`form-msg ${storeMsg.startsWith('Error') ? 'error' : ''}`}>{storeMsg}</p>
         )}
-        <div style={{ fontSize: 10, color: 'var(--text-muted)' }}>
-          Visit a company website and click Store, or paste a URL above.
-        </div>
-      </div>
+        <p className="form-hint">
+          {companies.length}/{MAX_COMPANIES} companies tracked
+        </p>
+      </form>
 
-      {/* Companies List */}
-      <div className="section-header">
-        Tracked Companies ({companies.length})
-      </div>
-
-      {loading ? (
+      {/* Company List */}
+      {companies.length === 0 ? (
         <div className="empty-state">
-          <span className="spinner" style={{ fontSize: 20 }}>&#8635;</span>
-          <p style={{ marginTop: 8 }}>Loading companies...</p>
-        </div>
-      ) : companies.length === 0 ? (
-        <div className="empty-state">
-          <h3>No companies tracked yet</h3>
-          <p>Bookmark your first company above to get started.</p>
+          <h3>No Companies Tracked</h3>
+          <p>Store a company website above to start tracking.</p>
         </div>
       ) : (
-        companies.map((company) => (
-          <CompanyCard
-            key={company.company_id}
-            company={company}
-            onRun={handleRunAgents}
-            onDelete={handleDeleteCompany}
-            isRunning={runningIds.has(company.company_id)}
-            runDisabled={false}
-            isDiscovering={discoveringIds.has(company.company_id)}
-          />
-        ))
+        <div className="company-list">
+          {companies.map((c) => {
+            const isRunning = activeRunIds.includes(c.company_id);
+            return (
+              <div key={c.company_id} className="card company-card">
+                <div className="card-header">
+                  <div>
+                    <div className="card-title">{c.company_name}</div>
+                    <div className="card-subtitle">
+                      {c.domain}
+                      {c.industry ? ` · ${c.industry}` : ''}
+                    </div>
+                  </div>
+                  <div className="company-actions">
+                    <button
+                      className="btn btn-primary btn-sm"
+                      onClick={() => onRunCompany(c)}
+                      disabled={isRunning}
+                    >
+                      {isRunning ? 'Running...' : 'Run'}
+                    </button>
+                    <button
+                      className="btn btn-sm btn-danger"
+                      onClick={() => setDeleteConfirm(c.company_id)}
+                    >
+                      Delete
+                    </button>
+                  </div>
+                </div>
+                {c.description && <p className="company-desc">{c.description}</p>}
+                {c.last_agent_run && (
+                  <p className="company-meta">
+                    Last run: {new Date(c.last_agent_run).toLocaleDateString()}
+                  </p>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {/* Delete Modal */}
+      {deleteConfirm && (
+        <div className="modal-overlay" onClick={() => setDeleteConfirm(null)}>
+          <div className="modal" onClick={(e) => e.stopPropagation()}>
+            <h2>Delete Company</h2>
+            <p>This will remove the company and all its reports and signals. Continue?</p>
+            <div className="modal-actions">
+              <button className="btn btn-secondary" onClick={() => setDeleteConfirm(null)}>Cancel</button>
+              <button className="btn btn-danger" onClick={() => handleDelete(deleteConfirm)}>Delete</button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

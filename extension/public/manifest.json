@@ -3,10 +3,12 @@
   "name": "Venture Signal Tracker",
   "version": "1.0.0",
   "description": "Track startups with one click and receive daily intelligence updates",
-  "permissions": ["activeTab", "storage", "tabs", "alarms"],
+  "permissions": ["activeTab", "storage", "tabs", "alarms", "sidePanel"],
   "host_permissions": ["https://venture-signal-radar.onrender.com/*"],
+  "side_panel": {
+    "default_path": "sidepanel.html"
+  },
   "action": {
-    "default_popup": "popup.html",
     "default_title": "Venture Signal Tracker",
     "default_icon": {
       "16": "icons/icon16.png",

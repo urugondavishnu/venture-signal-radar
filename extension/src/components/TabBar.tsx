@@ -1,4 +1,4 @@
-import { TabId } from '../popup/App';
+export type TabId = 'companies' | 'active-runs' | 'reports' | 'settings';
 
 interface TabBarProps {
   activeTab: TabId;
@@ -7,7 +7,7 @@ interface TabBarProps {
 }
 
 const TABS: { id: TabId; label: string }[] = [
-  { id: 'store', label: 'Companies' },
+  { id: 'companies', label: 'Companies' },
   { id: 'active-runs', label: 'Active Runs' },
   { id: 'reports', label: 'Reports' },
   { id: 'settings', label: 'Settings' },
@@ -15,54 +15,19 @@ const TABS: { id: TabId; label: string }[] = [
 
 export function TabBar({ activeTab, onTabChange, activeRunCount }: TabBarProps) {
   return (
-    <div
-      style={{
-        display: 'flex',
-        borderBottom: '1px solid var(--border)',
-        background: 'var(--bg-secondary)',
-        padding: '0 8px',
-      }}
-    >
+    <nav className="tab-bar">
       {TABS.map((tab) => (
         <button
           key={tab.id}
+          className={`tab-btn ${activeTab === tab.id ? 'active' : ''}`}
           onClick={() => onTabChange(tab.id)}
-          style={{
-            flex: 1,
-            padding: '10px 8px',
-            background: 'transparent',
-            border: 'none',
-            borderBottom: activeTab === tab.id ? '2px solid var(--accent)' : '2px solid transparent',
-            color: activeTab === tab.id ? 'var(--text-primary)' : 'var(--text-muted)',
-            fontSize: 12,
-            fontWeight: activeTab === tab.id ? 700 : 500,
-            cursor: 'pointer',
-            transition: 'all 0.15s',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            gap: 4,
-          }}
         >
           {tab.label}
           {tab.id === 'active-runs' && activeRunCount > 0 && (
-            <span
-              style={{
-                background: 'var(--accent)',
-                color: '#fff',
-                fontSize: 10,
-                fontWeight: 700,
-                padding: '1px 6px',
-                borderRadius: 10,
-                minWidth: 18,
-                textAlign: 'center',
-              }}
-            >
-              {activeRunCount}
-            </span>
+            <span className="tab-badge">{activeRunCount}</span>
           )}
         </button>
       ))}
-    </div>
+    </nav>
   );
 }

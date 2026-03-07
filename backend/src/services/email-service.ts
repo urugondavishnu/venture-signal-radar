@@ -1,15 +1,21 @@
-import { Resend } from 'resend';
+import nodemailer from 'nodemailer';
 import { ReportData, Company } from '../types';
 
-let resend: Resend | null = null;
+let transporter: nodemailer.Transporter | null = null;
 
-function getResend(): Resend {
-  if (!resend) {
-    const apiKey = process.env.RESEND_API_KEY;
-    if (!apiKey) throw new Error('RESEND_API_KEY not configured');
-    resend = new Resend(apiKey);
+function getTransporter(): nodemailer.Transporter {
+  if (!transporter) {
+    const user = process.env.BREVO_USER;
+    const pass = process.env.BREVO_SMTP_KEY;
+    if (!user || !pass) throw new Error('BREVO_USER and BREVO_SMTP_KEY must be configured');
+    transporter = nodemailer.createTransport({
+      host: 'smtp-relay.brevo.com',
+      port: 587,
+      secure: false,
+      auth: { user, pass },
+    });
   }
-  return resend;
+  return transporter;
 }
 
 /**
@@ -157,8 +163,8 @@ export async function sendReportEmail(
   report: ReportData,
 ): Promise<boolean> {
   try {
-    const r = getResend();
-    const fromEmail = process.env.RESEND_FROM_EMAIL || 'signals@resend.dev';
+    const transport = getTransporter();
+    const fromEmail = process.env.BREVO_FROM_EMAIL || 'signals@venture-signal-radar.com';
     const html = buildReportEmail(company, report);
     const csv = buildReportCSV(report);
 
@@ -179,7 +185,7 @@ export async function sendReportEmail(
     const safeCompanyName = company.company_name.replace(/[^a-zA-Z0-9_-]/g, '_');
     const fileDate = now.toISOString().slice(0, 10);
 
-    const result = await r.emails.send({
+    const result = await transport.sendMail({
       from: fromEmail,
       to: toEmail,
       subject,
@@ -187,18 +193,12 @@ export async function sendReportEmail(
       attachments: [
         {
           filename: `${safeCompanyName}_report_${fileDate}.csv`,
-          content: Buffer.from(csv),
+          content: csv,
         },
       ],
     });
 
-    // Log Resend response for debugging
-    if (result.error) {
-      console.error(`[Email] Resend API error:`, result.error);
-      return false;
-    }
-
-    console.log(`[Email] Report sent to ${toEmail} for ${company.company_name} (id: ${result.data?.id})`);
+    console.log(`[Email] Report sent to ${toEmail} for ${company.company_name} (messageId: ${result.messageId})`);
     return true;
   } catch (err) {
     console.error(`[Email] Failed to send report:`, err);

@@ -12,7 +12,14 @@ import { userRoutes } from './routes/users';
 const app = express();
 
 app.use(cors({
-  origin: process.env.FRONTEND_URL || '*',
+  origin: (origin, callback) => {
+    // Allow requests with no origin (curl, mobile, same-origin)
+    if (!origin) return callback(null, true);
+    // Allow Chrome extension origins
+    if (origin.startsWith('chrome-extension://')) return callback(null, true);
+    // Allow configured frontend and deployed app
+    return callback(null, true);
+  },
   credentials: true,
 }));
 app.use(express.json());

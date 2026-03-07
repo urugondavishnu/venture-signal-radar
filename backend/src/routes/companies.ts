@@ -1,8 +1,10 @@
 import { Router, Request, Response } from 'express';
 import { storeCompany, getCompanies, updateCompanyFromDiscovery, deleteCompany } from '../services/company-service';
+import { ensureUser } from '../services/user-service';
 import { runDiscoveryAgent } from '../agents/orchestrator';
 import { initSSE, sendSSE, endSSE } from '../utils/sse';
 import { DiscoveryResult } from '../types';
+import { requireAuth, AuthenticatedRequest } from '../middleware/auth';
 
 export const companyRoutes = Router();
 
@@ -10,8 +12,9 @@ export const companyRoutes = Router();
  * POST /api/store-company
  * Bookmark a company and run discovery agents
  */
-companyRoutes.post('/store-company', async (req: Request, res: Response) => {
+companyRoutes.post('/store-company', requireAuth, async (req: Request, res: Response) => {
   try {
+    const { userId, userEmail } = req as AuthenticatedRequest;
     const { website_url, page_title } = req.body;
 
     if (!website_url) {
@@ -19,11 +22,14 @@ companyRoutes.post('/store-company', async (req: Request, res: Response) => {
       return;
     }
 
+    // Ensure user record exists before FK insert
+    await ensureUser(userId, userEmail);
+
     // Initialize SSE stream
     initSSE(res);
 
     // Store company record
-    const company = await storeCompany(website_url, page_title);
+    const company = await storeCompany(userId, website_url, page_title);
 
     sendSSE(res, {
       type: 'company_stored',
@@ -53,7 +59,6 @@ companyRoutes.post('/store-company', async (req: Request, res: Response) => {
       });
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Unknown error';
-    // If headers not sent yet, send JSON error
     if (!res.headersSent) {
       res.status(500).json({ error: message });
     } else {
@@ -65,11 +70,12 @@ companyRoutes.post('/store-company', async (req: Request, res: Response) => {
 
 /**
  * GET /api/companies
- * Get all tracked companies
+ * Get all tracked companies for the authenticated user
  */
-companyRoutes.get('/companies', async (_req: Request, res: Response) => {
+companyRoutes.get('/companies', requireAuth, async (req: Request, res: Response) => {
   try {
-    const companies = await getCompanies();
+    const { userId } = req as AuthenticatedRequest;
+    const companies = await getCompanies(userId);
     res.json({ companies });
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Unknown error';
@@ -81,7 +87,7 @@ companyRoutes.get('/companies', async (_req: Request, res: Response) => {
  * DELETE /api/companies/:id
  * Delete a company and all associated signals + reports
  */
-companyRoutes.delete('/companies/:id', async (req: Request, res: Response) => {
+companyRoutes.delete('/companies/:id', requireAuth, async (req: Request, res: Response) => {
   try {
     const companyId = req.params.id as string;
     await deleteCompany(companyId);
@@ -91,4 +97,3 @@ companyRoutes.delete('/companies/:id', async (req: Request, res: Response) => {
     res.status(500).json({ error: message });
   }
 });
-

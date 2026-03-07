@@ -1,25 +1,25 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { Header } from './components/Header';
 import { TabBar, TabId } from './components/TabBar';
-import { EmailSetup } from './components/EmailSetup';
 import { CompaniesTab } from './components/CompaniesTab';
 import { ActiveRunsTab } from './components/ActiveRunsTab';
 import { ReportsTab } from './components/ReportsTab';
 import { SettingsTab } from './components/SettingsTab';
+import { useAuth } from './auth/AuthContext';
+import { LoginPage } from './auth/LoginPage';
+import { SignUpPage } from './auth/SignUpPage';
 import {
   Company,
   ActiveRun,
   AgentState,
   ReportData,
   getCompanies,
-  getUserSettings,
   runAgentsSSE,
 } from './api/client';
 
 // ---------- localStorage persistence ----------
 
 const STORAGE_KEYS = {
-  email: 'vsr_email',
   activeRuns: 'vsr_active_runs',
   activeTab: 'vsr_active_tab',
 };
@@ -37,10 +37,20 @@ function saveToStorage(key: string, value: unknown) {
   localStorage.setItem(key, JSON.stringify(value));
 }
 
+// ---------- Concurrency-limited run queue (max 2 at a time) ----------
+
+const MAX_CONCURRENT_RUNS = 2;
+
+interface QueueEntry {
+  company: Company;
+}
+
 // ---------- App ----------
 
 export function App() {
-  const [email, setEmail] = useState<string | null>(() => loadFromStorage(STORAGE_KEYS.email, null));
+  const { user, loading: authLoading, signOut } = useAuth();
+  const [authPage, setAuthPage] = useState<'login' | 'signup'>('login');
+
   const [companies, setCompanies] = useState<Company[]>([]);
   const [activeRuns, setActiveRuns] = useState<ActiveRun[]>(() =>
     loadFromStorage(STORAGE_KEYS.activeRuns, []),
@@ -51,25 +61,24 @@ export function App() {
   const [reportReload, setReportReload] = useState(0);
   const [loading, setLoading] = useState(true);
 
-  // Ref for latest activeRuns (avoids stale closures in SSE callbacks)
+  // Refs for queue management (avoids stale closures in SSE callbacks)
   const activeRunsRef = useRef(activeRuns);
   activeRunsRef.current = activeRuns;
+
+  const runQueueRef = useRef<QueueEntry[]>([]);
+  const runningCountRef = useRef(0);
 
   // Persist to localStorage on change
   useEffect(() => saveToStorage(STORAGE_KEYS.activeRuns, activeRuns), [activeRuns]);
   useEffect(() => saveToStorage(STORAGE_KEYS.activeTab, activeTab), [activeTab]);
-  useEffect(() => { if (email) saveToStorage(STORAGE_KEYS.email, email); }, [email]);
 
-  // Load initial data
+  // Load initial data when authenticated
   useEffect(() => {
+    if (!user) { setLoading(false); return; }
     const init = async () => {
       try {
-        const [companiesData, settings] = await Promise.all([
-          getCompanies(),
-          getUserSettings(),
-        ]);
+        const companiesData = await getCompanies();
         setCompanies(companiesData);
-        if (settings.email) setEmail(settings.email);
       } catch {
         // offline or first load
       } finally {
@@ -77,7 +86,7 @@ export function App() {
       }
     };
     init();
-  }, []);
+  }, [user]);
 
   const refreshCompanies = useCallback(async () => {
     try {
@@ -86,26 +95,39 @@ export function App() {
     } catch { /* ignore */ }
   }, []);
 
-  // ---------- Run agents for a company ----------
+  // ---------- Process queue: launch next company if slot available ----------
 
-  const handleRunCompany = useCallback((company: Company) => {
-    // Skip if already running
-    if (activeRunsRef.current.some((r) => r.companyId === company.company_id && !r.isComplete)) return;
+  const processQueue = useCallback(() => {
+    while (runningCountRef.current < MAX_CONCURRENT_RUNS && runQueueRef.current.length > 0) {
+      const next = runQueueRef.current.shift()!;
+      executeRun(next.company);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
-    // Create new run entry
-    const newRun: ActiveRun = {
-      companyId: company.company_id,
-      companyName: company.company_name,
-      agents: [],
-      isComplete: false,
-      liveReport: null,
-      startedAt: Date.now(),
+  // ---------- Execute a single company run (SSE stream) ----------
+
+  const executeRun = useCallback((company: Company) => {
+    runningCountRef.current++;
+
+    // Mark as no longer queued, reset startedAt to now (timeout starts now)
+    setActiveRuns((prev) =>
+      prev.map((r) =>
+        r.companyId === company.company_id
+          ? { ...r, queued: false, startedAt: Date.now() }
+          : r,
+      ),
+    );
+
+    let completedViaEvent = false;
+
+    const onRunComplete = () => {
+      if (completedViaEvent) return;
+      completedViaEvent = true;
+      runningCountRef.current--;
+      processQueue();
     };
 
-    setActiveRuns((prev) => [...prev, newRun]);
-    setActiveTab('active-runs');
-
-    // Start SSE stream
     runAgentsSSE(
       company.company_id,
       (event) => {
@@ -157,6 +179,7 @@ export function App() {
               ),
             );
             setReportReload((n) => n + 1);
+            onRunComplete();
             break;
         }
       },
@@ -174,6 +197,7 @@ export function App() {
           }),
         );
         setReportReload((n) => n + 1);
+        onRunComplete();
       },
       (err) => {
         console.error('Agent run error:', err);
@@ -182,21 +206,67 @@ export function App() {
             r.companyId === company.company_id ? { ...r, isComplete: true } : r,
           ),
         );
+        onRunComplete();
       },
     );
-  }, []);
+  }, [processQueue]);
+
+  // ---------- Enqueue a company run ----------
+
+  const handleRunCompany = useCallback((company: Company) => {
+    // Skip if already running or queued
+    if (activeRunsRef.current.some((r) => r.companyId === company.company_id && !r.isComplete)) return;
+    if (runQueueRef.current.some((q) => q.company.company_id === company.company_id)) return;
+
+    const willRunImmediately = runningCountRef.current < MAX_CONCURRENT_RUNS;
+
+    // Create run entry
+    const newRun: ActiveRun = {
+      companyId: company.company_id,
+      companyName: company.company_name,
+      agents: [],
+      isComplete: false,
+      liveReport: null,
+      startedAt: Date.now(),
+      queued: !willRunImmediately,
+    };
+
+    setActiveRuns((prev) => [...prev, newRun]);
+    setActiveTab('active-runs');
+
+    if (willRunImmediately) {
+      executeRun(company);
+    } else {
+      runQueueRef.current.push({ company });
+    }
+  }, [executeRun]);
 
   const handleDismissRun = useCallback((companyId: string) => {
+    runQueueRef.current = runQueueRef.current.filter((q) => q.company.company_id !== companyId);
     setActiveRuns((prev) => prev.filter((r) => r.companyId !== companyId));
-  }, []);
-
-  const handleEmailSetup = useCallback((newEmail: string) => {
-    setEmail(newEmail);
-    saveToStorage(STORAGE_KEYS.email, newEmail);
   }, []);
 
   // ---------- Render ----------
 
+  // Auth loading
+  if (authLoading) {
+    return (
+      <div className="app-loading">
+        <span className="spinner" style={{ fontSize: 32 }}>&#8635;</span>
+        <p>Loading...</p>
+      </div>
+    );
+  }
+
+  // Not authenticated — show login/signup
+  if (!user) {
+    if (authPage === 'signup') {
+      return <SignUpPage onSwitchToLogin={() => setAuthPage('login')} />;
+    }
+    return <LoginPage onSwitchToSignUp={() => setAuthPage('signup')} />;
+  }
+
+  // Data loading
   if (loading) {
     return (
       <div className="app-loading">
@@ -206,16 +276,11 @@ export function App() {
     );
   }
 
-  // Email setup gate
-  if (!email) {
-    return <EmailSetup onComplete={handleEmailSetup} />;
-  }
-
   const incompleteRuns = activeRuns.filter((r) => !r.isComplete);
 
   return (
     <div className="app">
-      <Header email={email} />
+      <Header email={user.email || null} onSignOut={signOut} />
       <TabBar
         activeTab={activeTab}
         onTabChange={setActiveTab}

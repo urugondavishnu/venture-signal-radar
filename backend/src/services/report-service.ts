@@ -73,13 +73,15 @@ export function generateReportFromFindings(company: Company, findings: SignalFin
 export async function storeReport(
   companyId: string,
   reportData: ReportData,
+  userId?: string,
 ): Promise<Report> {
-  const report = {
+  const report: Record<string, unknown> = {
     report_id: uuidv4(),
     company_id: companyId,
     generated_at: new Date().toISOString(),
     report_data: reportData,
   };
+  if (userId) report.user_id = userId;
 
   const { data, error } = await supabase
     .from('reports')
@@ -128,12 +130,13 @@ export async function deleteReport(reportId: string): Promise<void> {
 }
 
 /**
- * Get all reports across all companies
+ * Get all reports for a user
  */
-export async function getAllReports(): Promise<Report[]> {
+export async function getAllReports(userId: string): Promise<Report[]> {
   const { data, error } = await supabase
     .from('reports')
     .select('*, companies(company_name, website_url)')
+    .eq('user_id', userId)
     .order('generated_at', { ascending: false })
     .limit(50);
 

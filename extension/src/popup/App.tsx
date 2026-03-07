@@ -1,179 +1,249 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { Header } from '../components/Header';
-import { TabBar } from '../components/TabBar';
-import { StoreCompaniesTab } from '../tabs/StoreCompaniesTab';
+import { TabBar, TabId } from '../components/TabBar';
+import { CompaniesTab } from '../tabs/StoreCompaniesTab';
 import { ActiveRunsTab } from '../tabs/ActiveRunsTab';
 import { ReportsTab } from '../tabs/ReportsTab';
 import { SettingsTab } from '../tabs/SettingsTab';
-import { OnboardingModal } from '../components/OnboardingModal';
-import { getUserSettings } from '../api/client';
+import { useAuth } from '../auth/AuthContext';
+import { LoginPage } from '../auth/LoginPage';
+import { SignUpPage } from '../auth/SignUpPage';
+import {
+  Company,
+  ActiveRun,
+  AgentState,
+  ReportData,
+  getCompanies,
+  runAgentsSSE,
+} from '../api/client';
 import '../styles/global.css';
 
-export type TabId = 'store' | 'active-runs' | 'reports' | 'settings';
-
-export interface ActiveRun {
-  companyId: string;
-  companyName: string;
-  agents: AgentState[];
-  isComplete: boolean;
-  liveReport: ReportData | null;
-  emailSent?: boolean;
+function loadFromStorage<T>(key: string, fallback: T): T {
+  try {
+    const raw = localStorage.getItem(key);
+    return raw ? JSON.parse(raw) : fallback;
+  } catch {
+    return fallback;
+  }
 }
 
-export interface AgentState {
-  agentId: string;
-  agentType: string;
-  agentName: string;
-  status: 'connecting' | 'browsing' | 'analyzing' | 'complete' | 'error';
-  message?: string;
-  streamingUrl?: string;
-  findings?: { signals: Array<{ signal_type: string; title: string; summary: string; source: string }> };
-  error?: string;
+function saveToStorage(key: string, value: unknown) {
+  localStorage.setItem(key, JSON.stringify(value));
 }
 
-export interface ReportData {
-  company_overview: string;
-  product_launches: ReportSignal[];
-  financings: ReportSignal[];
-  leadership_changes: ReportSignal[];
-  revenue_milestones: ReportSignal[];
-  customer_wins: ReportSignal[];
-  pricing_updates: ReportSignal[];
-  hiring_trends: ReportSignal[];
-  general_news: ReportSignal[];
-  founder_contacts: ReportSignal[];
-  leading_indicators: ReportSignal[];
-  competitive_landscape: ReportSignal[];
-  fundraising_signals: ReportSignal[];
-}
+const MAX_CONCURRENT_RUNS = 2;
 
-export interface ReportSignal {
-  title: string;
-  summary: string;
-  source: string;
-  url?: string;
-  detected_at: string;
+interface QueueEntry {
+  company: Company;
 }
 
 export function App() {
-  const [activeTab, setActiveTab] = useState<TabId>('store');
-  const [activeRuns, setActiveRuns] = useState<ActiveRun[]>([]);
-  const [showOnboarding, setShowOnboarding] = useState(false);
-  const [userEmail, setUserEmail] = useState<string | null>(null);
+  const { user, loading: authLoading, signOut } = useAuth();
+  const [authPage, setAuthPage] = useState<'login' | 'signup'>('login');
 
-  // Load user settings — cache first, then refresh from API
+  const [companies, setCompanies] = useState<Company[]>([]);
+  const [activeRuns, setActiveRuns] = useState<ActiveRun[]>(() =>
+    loadFromStorage('vsr_active_runs', []),
+  );
+  const [activeTab, setActiveTab] = useState<TabId>(() =>
+    loadFromStorage('vsr_active_tab', 'companies') as TabId,
+  );
+  const [reportReload, setReportReload] = useState(0);
+  const [loading, setLoading] = useState(true);
+
+  const activeRunsRef = useRef(activeRuns);
+  activeRunsRef.current = activeRuns;
+  const runQueueRef = useRef<QueueEntry[]>([]);
+  const runningCountRef = useRef(0);
+
+  useEffect(() => saveToStorage('vsr_active_runs', activeRuns), [activeRuns]);
+  useEffect(() => saveToStorage('vsr_active_tab', activeTab), [activeTab]);
+
   useEffect(() => {
-    // Load from cache first
-    try {
-      chrome.storage.local.get('cachedSettings', (result) => {
-        if (result.cachedSettings?.email) {
-          setUserEmail(result.cachedSettings.email);
-        } else {
-          setShowOnboarding(true);
-        }
-      });
-    } catch {
-      setShowOnboarding(true);
-    }
-
-    // Then refresh from API
-    getUserSettings().then((settings) => {
-      if (settings.email) {
-        setUserEmail(settings.email);
-        setShowOnboarding(false);
-      }
-      try { chrome.storage.local.set({ cachedSettings: settings }); } catch {}
-    }).catch(() => {});
-  }, []);
-
-  // Load activeRuns from chrome.storage.local and listen for changes from service worker
-  useEffect(() => {
-    try {
-      chrome.storage.local.get('activeRuns', (result) => {
-        if (result.activeRuns?.length) {
-          setActiveRuns(result.activeRuns);
-        }
-      });
-    } catch {
-      // Not in extension context
-    }
-
-    const listener = (changes: { [key: string]: chrome.storage.StorageChange }) => {
-      if (changes.activeRuns) {
-        setActiveRuns(changes.activeRuns.newValue || []);
+    if (!user) { setLoading(false); return; }
+    const init = async () => {
+      try {
+        const companiesData = await getCompanies();
+        setCompanies(companiesData);
+      } catch { /* offline */ } finally {
+        setLoading(false);
       }
     };
+    init();
+  }, [user]);
 
-    try {
-      chrome.storage.onChanged.addListener(listener);
-      return () => chrome.storage.onChanged.removeListener(listener);
-    } catch {
-      // Not in extension context
-      return;
-    }
+  const refreshCompanies = useCallback(async () => {
+    try { const data = await getCompanies(); setCompanies(data); } catch { /* ignore */ }
   }, []);
 
-  // Start a run via service worker message
-  const startRun = useCallback((companyId: string, companyName: string) => {
-    try {
-      chrome.runtime.sendMessage({
-        type: 'START_RUN',
-        companyId,
-        companyName,
-      });
-    } catch {
-      // Not in extension context
+  const processQueue = useCallback(() => {
+    while (runningCountRef.current < MAX_CONCURRENT_RUNS && runQueueRef.current.length > 0) {
+      const next = runQueueRef.current.shift()!;
+      executeRun(next.company);
     }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const executeRun = useCallback((company: Company) => {
+    runningCountRef.current++;
+    setActiveRuns((prev) =>
+      prev.map((r) => r.companyId === company.company_id ? { ...r, queued: false, startedAt: Date.now() } : r),
+    );
+
+    let completedViaEvent = false;
+    const onRunComplete = () => {
+      if (completedViaEvent) return;
+      completedViaEvent = true;
+      runningCountRef.current--;
+      processQueue();
+    };
+
+    runAgentsSSE(
+      company.company_id,
+      (event) => {
+        const { type, data } = event;
+        switch (type) {
+          case 'agent_connecting':
+          case 'agent_browsing':
+          case 'agent_streaming_url':
+          case 'agent_status':
+          case 'agent_complete':
+          case 'agent_error': {
+            const agentData = data as unknown as AgentState;
+            setActiveRuns((prev) =>
+              prev.map((r) => {
+                if (r.companyId !== company.company_id) return r;
+                const idx = r.agents.findIndex((a) => a.agentId === agentData.agentId);
+                const agents = idx >= 0
+                  ? r.agents.map((a) => (a.agentId === agentData.agentId ? { ...a, ...agentData } : a))
+                  : [...r.agents, agentData];
+                return { ...r, agents };
+              }),
+            );
+            break;
+          }
+          case 'report_generated':
+            setActiveRuns((prev) =>
+              prev.map((r) => r.companyId === company.company_id
+                ? { ...r, liveReport: (data as { report_data: ReportData }).report_data } : r),
+            );
+            break;
+          case 'email_sent':
+            setActiveRuns((prev) =>
+              prev.map((r) => r.companyId === company.company_id
+                ? { ...r, emailSent: (data as { success: boolean }).success } : r),
+            );
+            break;
+          case 'pipeline_complete':
+            setActiveRuns((prev) =>
+              prev.map((r) => r.companyId === company.company_id ? { ...r, isComplete: true } : r),
+            );
+            setReportReload((n) => n + 1);
+            onRunComplete();
+            break;
+        }
+      },
+      () => {
+        setActiveRuns((prev) =>
+          prev.map((r) => {
+            if (r.companyId !== company.company_id || r.isComplete) return r;
+            const agents = r.agents.map((a) =>
+              a.status !== 'complete' && a.status !== 'error'
+                ? { ...a, status: 'complete' as const, findings: { signals: [] }, message: '0 results found' }
+                : a,
+            );
+            return { ...r, agents, isComplete: true };
+          }),
+        );
+        setReportReload((n) => n + 1);
+        onRunComplete();
+      },
+      (err) => {
+        console.error('Agent run error:', err);
+        setActiveRuns((prev) =>
+          prev.map((r) => r.companyId === company.company_id ? { ...r, isComplete: true } : r),
+        );
+        onRunComplete();
+      },
+    );
+  }, [processQueue]);
+
+  const handleRunCompany = useCallback((company: Company) => {
+    if (activeRunsRef.current.some((r) => r.companyId === company.company_id && !r.isComplete)) return;
+    if (runQueueRef.current.some((q) => q.company.company_id === company.company_id)) return;
+
+    const willRunImmediately = runningCountRef.current < MAX_CONCURRENT_RUNS;
+    const newRun: ActiveRun = {
+      companyId: company.company_id,
+      companyName: company.company_name,
+      agents: [],
+      isComplete: false,
+      liveReport: null,
+      startedAt: Date.now(),
+      queued: !willRunImmediately,
+    };
+
+    setActiveRuns((prev) => [...prev, newRun]);
     setActiveTab('active-runs');
+
+    if (willRunImmediately) {
+      executeRun(company);
+    } else {
+      runQueueRef.current.push({ company });
+    }
+  }, [executeRun]);
+
+  const handleDismissRun = useCallback((companyId: string) => {
+    runQueueRef.current = runQueueRef.current.filter((q) => q.company.company_id !== companyId);
+    setActiveRuns((prev) => prev.filter((r) => r.companyId !== companyId));
   }, []);
 
-  // Dismiss a completed run via service worker message
-  const removeActiveRun = useCallback((companyId: string) => {
-    try {
-      chrome.runtime.sendMessage({
-        type: 'DISMISS_RUN',
-        companyId,
-      });
-    } catch {
-      // Not in extension context — update local state
-      setActiveRuns((prev) => prev.filter((r) => r.companyId !== companyId));
+  if (authLoading) {
+    return (
+      <div className="app-loading">
+        <span className="spinner" style={{ fontSize: 32 }}>&#8635;</span>
+        <p>Loading...</p>
+      </div>
+    );
+  }
+
+  if (!user) {
+    if (authPage === 'signup') {
+      return <SignUpPage onSwitchToLogin={() => setAuthPage('login')} />;
     }
-  }, []);
+    return <LoginPage onSwitchToSignUp={() => setAuthPage('signup')} />;
+  }
+
+  if (loading) {
+    return (
+      <div className="app-loading">
+        <span className="spinner" style={{ fontSize: 32 }}>&#8635;</span>
+        <p>Loading...</p>
+      </div>
+    );
+  }
+
+  const incompleteRuns = activeRuns.filter((r) => !r.isComplete);
 
   return (
     <div className="app">
-      <Header />
-      <TabBar activeTab={activeTab} onTabChange={setActiveTab} activeRunCount={activeRuns.filter(r => !r.isComplete).length} />
-      <div className="tab-content">
-        {activeTab === 'store' && (
-          <StoreCompaniesTab
-            onStartRun={startRun}
-            activeRuns={activeRuns}
+      <Header email={user.email || null} onSignOut={signOut} />
+      <TabBar activeTab={activeTab} onTabChange={setActiveTab} activeRunCount={incompleteRuns.length} />
+      <main className="app-content">
+        {activeTab === 'companies' && (
+          <CompaniesTab
+            companies={companies}
+            onCompanyAdded={refreshCompanies}
+            onRunCompany={handleRunCompany}
+            activeRunIds={activeRuns.filter((r) => !r.isComplete).map((r) => r.companyId)}
           />
         )}
         {activeTab === 'active-runs' && (
-          <ActiveRunsTab
-            activeRuns={activeRuns}
-            onDismiss={removeActiveRun}
-          />
+          <ActiveRunsTab activeRuns={activeRuns} onDismiss={handleDismissRun} />
         )}
-        {activeTab === 'reports' && <ReportsTab activeRuns={activeRuns} />}
-        {activeTab === 'settings' && (
-          <SettingsTab
-            userEmail={userEmail}
-            onEmailChange={setUserEmail}
-          />
-        )}
-      </div>
-      {showOnboarding && (
-        <OnboardingModal
-          onComplete={(email) => {
-            setUserEmail(email);
-            setShowOnboarding(false);
-          }}
-          onSkip={() => setShowOnboarding(false)}
-        />
-      )}
+        {activeTab === 'reports' && <ReportsTab triggerReload={reportReload} />}
+        {activeTab === 'settings' && <SettingsTab />}
+      </main>
     </div>
   );
 }

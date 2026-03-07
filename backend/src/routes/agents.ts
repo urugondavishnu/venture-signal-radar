@@ -3,9 +3,10 @@ import { getCompanyById, updateLastAgentRun } from '../services/company-service'
 import { storeSignals } from '../services/signal-service';
 import { generateReportFromFindings, storeReport } from '../services/report-service';
 import { sendReportEmail } from '../services/email-service';
-import { getUserSettings } from '../services/user-service';
+import { getUserSettings, ensureUser } from '../services/user-service';
 import { runIntelligenceAgents } from '../agents/orchestrator';
 import { initSSE, sendSSE, endSSE } from '../utils/sse';
+import { requireAuth, AuthenticatedRequest } from '../middleware/auth';
 
 export const agentRoutes = Router();
 
@@ -15,14 +16,18 @@ export const agentRoutes = Router();
  * Returns SSE stream with real-time updates.
  * After agents complete: stores signals, generates report, sends email.
  */
-agentRoutes.post('/run-agents', async (req: Request, res: Response) => {
+agentRoutes.post('/run-agents', requireAuth, async (req: Request, res: Response) => {
   try {
+    const { userId, userEmail } = req as AuthenticatedRequest;
     const { company_id } = req.body;
 
     if (!company_id) {
       res.status(400).json({ error: 'company_id is required' });
       return;
     }
+
+    // Ensure user record exists before report FK insert
+    await ensureUser(userId, userEmail);
 
     const company = await getCompanyById(company_id);
     if (!company) {
@@ -55,7 +60,7 @@ agentRoutes.post('/run-agents', async (req: Request, res: Response) => {
 
     // Generate report directly from findings
     const reportData = generateReportFromFindings(company, findings);
-    const report = await storeReport(company.company_id, reportData);
+    const report = await storeReport(company.company_id, reportData, userId);
 
     sendSSE(res, {
       type: 'report_generated',
@@ -66,18 +71,17 @@ agentRoutes.post('/run-agents', async (req: Request, res: Response) => {
       },
     });
 
-    // Send email report
-    const settings = await getUserSettings();
-    if (settings.email) {
-      console.log(`[Pipeline] Sending email for ${company.company_name} to ${settings.email}...`);
-      const emailSent = await sendReportEmail(settings.email, company, reportData);
+    // Send email report using auth user's email
+    const settings = await getUserSettings(userId);
+    const emailTo = settings.email || userEmail;
+    if (emailTo) {
+      console.log(`[Pipeline] Sending email for ${company.company_name} to ${emailTo}...`);
+      const emailSent = await sendReportEmail(emailTo, company, reportData);
       console.log(`[Pipeline] Email result for ${company.company_name}: ${emailSent}`);
       sendSSE(res, {
         type: 'email_sent',
-        data: { success: emailSent, email: settings.email },
+        data: { success: emailSent, email: emailTo },
       });
-    } else {
-      console.log(`[Pipeline] No email configured, skipping email for ${company.company_name}`);
     }
 
     sendSSE(res, {
@@ -103,7 +107,7 @@ agentRoutes.post('/run-agents', async (req: Request, res: Response) => {
 /**
  * GET /api/agent-status/:company_id
  */
-agentRoutes.get('/agent-status/:company_id', async (req: Request, res: Response) => {
+agentRoutes.get('/agent-status/:company_id', requireAuth, async (req: Request, res: Response) => {
   try {
     const company_id = req.params.company_id as string;
     const company = await getCompanyById(company_id);

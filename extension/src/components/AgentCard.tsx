@@ -1,4 +1,4 @@
-import { AgentState } from '../popup/App';
+import { AgentState } from '../api/client';
 
 interface AgentCardProps {
   agent: AgentState;
@@ -18,10 +18,8 @@ export function AgentCard({ agent }: AgentCardProps) {
 
   return (
     <div
-      className="card"
-      style={{
-        borderColor: agent.status === 'complete' ? 'rgba(34,197,94,0.3)' : undefined,
-      }}
+      className="card agent-card"
+      style={{ borderColor: agent.status === 'complete' ? 'rgba(34,197,94,0.3)' : undefined }}
     >
       <div className="card-header">
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -33,7 +31,6 @@ export function AgentCard({ agent }: AgentCardProps) {
         </span>
       </div>
 
-      {/* Live Preview */}
       {agent.streamingUrl && isActive && (
         <div className="live-preview">
           <iframe
@@ -48,14 +45,10 @@ export function AgentCard({ agent }: AgentCardProps) {
         </div>
       )}
 
-      {/* Status Message */}
       {agent.message && isActive && (
-        <div style={{ fontSize: 11, color: 'var(--text-secondary)', marginTop: 4 }}>
-          {agent.message}
-        </div>
+        <div style={{ fontSize: 11, color: 'var(--text-secondary)', marginTop: 4 }}>{agent.message}</div>
       )}
 
-      {/* Findings */}
       {agent.status === 'complete' && (
         <div style={{ marginTop: 6 }}>
           <div style={{ fontSize: 11, color: signalCount > 0 ? 'var(--success)' : 'var(--text-muted)', fontWeight: 600 }}>
@@ -70,11 +63,8 @@ export function AgentCard({ agent }: AgentCardProps) {
         </div>
       )}
 
-      {/* Error */}
       {agent.status === 'error' && agent.error && (
-        <div style={{ fontSize: 11, color: 'var(--error)', marginTop: 4 }}>
-          {agent.error}
-        </div>
+        <div style={{ fontSize: 11, color: 'var(--error)', marginTop: 4 }}>{agent.error}</div>
       )}
     </div>
   );

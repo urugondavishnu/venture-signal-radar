@@ -1,6 +1,35 @@
+import { supabase } from '../lib/supabase';
+
 // In dev, Vite proxy handles /api → localhost:3001
 // In prod, same origin serves both app and API
 const API_BASE = '/api';
+
+// ---------- Auth Helper ----------
+
+async function getAuthHeaders(): Promise<Record<string, string>> {
+  const { data: { session } } = await supabase.auth.getSession();
+  if (!session?.access_token) return {};
+  return { Authorization: `Bearer ${session.access_token}` };
+}
+
+async function authFetch(url: string, opts: RequestInit = {}): Promise<Response> {
+  const authHeaders = await getAuthHeaders();
+  const existingHeaders = opts.headers instanceof Headers
+    ? Object.fromEntries(opts.headers.entries())
+    : Array.isArray(opts.headers)
+      ? Object.fromEntries(opts.headers)
+      : (opts.headers as Record<string, string> | undefined) || {};
+  const headers: Record<string, string> = { ...authHeaders, ...existingHeaders };
+  const res = await fetch(url, { ...opts, headers });
+  if (res.status === 401) {
+    const { data } = await supabase.auth.refreshSession();
+    if (data.session) {
+      headers.Authorization = `Bearer ${data.session.access_token}`;
+      return fetch(url, { ...opts, headers });
+    }
+  }
+  return res;
+}
 
 // ---------- Types ----------
 
@@ -69,6 +98,7 @@ export interface ActiveRun {
   liveReport: ReportData | null;
   emailSent?: boolean;
   startedAt: number;
+  queued?: boolean;
 }
 
 export type EmailFrequency = 'daily' | 'every_3_days' | 'weekly' | 'monthly' | 'only_on_run';
@@ -81,29 +111,33 @@ export interface UserSettings {
 // ---------- REST API ----------
 
 export async function getCompanies(): Promise<Company[]> {
-  const res = await fetch(`${API_BASE}/companies`);
+  const res = await authFetch(`${API_BASE}/companies`);
   const data = await res.json();
   return data.companies || [];
 }
 
 export async function deleteCompany(id: string): Promise<void> {
-  await fetch(`${API_BASE}/companies/${id}`, { method: 'DELETE' });
+  await authFetch(`${API_BASE}/companies/${id}`, { method: 'DELETE' });
+}
+
+export async function deleteReport(id: string): Promise<void> {
+  await authFetch(`${API_BASE}/reports/${id}`, { method: 'DELETE' });
 }
 
 export async function getReports(companyId?: string): Promise<Report[]> {
   const url = companyId ? `${API_BASE}/reports?company_id=${companyId}` : `${API_BASE}/reports`;
-  const res = await fetch(url);
+  const res = await authFetch(url);
   const data = await res.json();
   return data.reports || [];
 }
 
 export async function getUserSettings(): Promise<UserSettings> {
-  const res = await fetch(`${API_BASE}/user-settings`);
+  const res = await authFetch(`${API_BASE}/user-settings`);
   return res.json();
 }
 
 export async function setEmail(email: string, frequency?: EmailFrequency): Promise<void> {
-  await fetch(`${API_BASE}/set-email`, {
+  await authFetch(`${API_BASE}/set-email`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ email, email_frequency: frequency }),
@@ -111,7 +145,7 @@ export async function setEmail(email: string, frequency?: EmailFrequency): Promi
 }
 
 export async function setEmailFrequency(frequency: EmailFrequency): Promise<void> {
-  await fetch(`${API_BASE}/set-email-frequency`, {
+  await authFetch(`${API_BASE}/set-email-frequency`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ email_frequency: frequency }),
@@ -128,24 +162,27 @@ export function storeCompanySSE(
 ): AbortController {
   const controller = new AbortController();
 
-  fetch(`${API_BASE}/store-company`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ website_url: websiteUrl }),
-    signal: controller.signal,
-  })
-    .then(async (res) => {
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({ error: res.statusText }));
-        onError(err.error || 'Failed to store company');
-        return;
-      }
-      await readSSE(res, onEvent);
-      onDone();
+  getAuthHeaders().then((authHeaders) => {
+    fetch(`${API_BASE}/store-company`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...authHeaders },
+      body: JSON.stringify({ website_url: websiteUrl }),
+      signal: controller.signal,
     })
-    .catch((err) => {
-      if (err.name !== 'AbortError') onError(err.message);
-    });
+      .then(async (res) => {
+        if (!res.ok) {
+          if (res.status === 401) { onError('Session expired. Please sign in again.'); return; }
+          const err = await res.json().catch(() => ({ error: res.statusText }));
+          onError(err.error || 'Failed to store company');
+          return;
+        }
+        await readSSE(res, onEvent);
+        onDone();
+      })
+      .catch((err) => {
+        if (err.name !== 'AbortError') onError(err.message);
+      });
+  });
 
   return controller;
 }
@@ -158,24 +195,27 @@ export function runAgentsSSE(
 ): AbortController {
   const controller = new AbortController();
 
-  fetch(`${API_BASE}/run-agents`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ company_id: companyId }),
-    signal: controller.signal,
-  })
-    .then(async (res) => {
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({ error: res.statusText }));
-        onError(err.error || 'Failed to run agents');
-        return;
-      }
-      await readSSE(res, onEvent);
-      onDone();
+  getAuthHeaders().then((authHeaders) => {
+    fetch(`${API_BASE}/run-agents`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...authHeaders },
+      body: JSON.stringify({ company_id: companyId }),
+      signal: controller.signal,
     })
-    .catch((err) => {
-      if (err.name !== 'AbortError') onError(err.message);
-    });
+      .then(async (res) => {
+        if (!res.ok) {
+          if (res.status === 401) { onError('Session expired. Please sign in again.'); return; }
+          const err = await res.json().catch(() => ({ error: res.statusText }));
+          onError(err.error || 'Failed to run agents');
+          return;
+        }
+        await readSSE(res, onEvent);
+        onDone();
+      })
+      .catch((err) => {
+        if (err.name !== 'AbortError') onError(err.message);
+      });
+  });
 
   return controller;
 }

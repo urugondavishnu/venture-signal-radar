@@ -1,10 +1,10 @@
 import { useState, useEffect } from 'react';
 import {
   getUserSettings,
-  setEmail,
   setEmailFrequency,
   EmailFrequency,
 } from '../api/client';
+import { useAuth } from '../auth/AuthContext';
 
 const FREQUENCY_OPTIONS: { value: EmailFrequency; label: string; desc: string }[] = [
   { value: 'daily', label: 'Daily', desc: 'Every day at 7:00 AM' },
@@ -15,31 +15,14 @@ const FREQUENCY_OPTIONS: { value: EmailFrequency; label: string; desc: string }[
 ];
 
 export function SettingsTab() {
-  const [email, setEmailState] = useState('');
+  const { user } = useAuth();
   const [frequency, setFrequency] = useState<EmailFrequency>('only_on_run');
-  const [saving, setSaving] = useState(false);
-  const [msg, setMsg] = useState('');
 
   useEffect(() => {
     getUserSettings().then((s) => {
-      if (s.email) setEmailState(s.email);
       if (s.email_frequency) setFrequency(s.email_frequency);
     });
   }, []);
-
-  const handleSaveEmail = async () => {
-    if (!email.trim()) return;
-    setSaving(true);
-    setMsg('');
-    try {
-      await setEmail(email.trim());
-      setMsg('Email saved!');
-    } catch {
-      setMsg('Failed to save.');
-    } finally {
-      setSaving(false);
-    }
-  };
 
   const handleFrequencyChange = async (freq: EmailFrequency) => {
     setFrequency(freq);
@@ -56,22 +39,20 @@ export function SettingsTab() {
       <div className="settings-section">
         <h3 className="section-header">Report Email</h3>
         <p className="settings-desc">
-          Intelligence reports will be sent to this email. Make sure it's the same
-          email you used to sign in at resend.com.
+          Intelligence reports will be sent to your account email:
         </p>
         <div className="form-row">
           <input
             type="email"
             className="input"
-            placeholder="you@example.com"
-            value={email}
-            onChange={(e) => setEmailState(e.target.value)}
+            value={user?.email || ''}
+            disabled
+            style={{ opacity: 0.7 }}
           />
-          <button className="btn btn-primary" onClick={handleSaveEmail} disabled={saving}>
-            {saving ? 'Saving...' : 'Save'}
-          </button>
         </div>
-        {msg && <p className="form-msg">{msg}</p>}
+        <p className="form-hint" style={{ marginTop: 4 }}>
+          This is the email you signed up with. Reports are sent here automatically.
+        </p>
       </div>
 
       {/* Frequency Section */}

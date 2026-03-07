@@ -3,8 +3,10 @@ import {
   setUserEmail,
   getUserSettings,
   setEmailFrequency,
+  ensureUser,
   EmailFrequency,
 } from '../services/user-service';
+import { requireAuth, AuthenticatedRequest } from '../middleware/auth';
 
 export const userRoutes = Router();
 
@@ -17,11 +19,27 @@ const VALID_FREQUENCIES: EmailFrequency[] = [
 ];
 
 /**
+ * POST /api/auth/init
+ * Called after login/signup to ensure user record exists in our users table
+ */
+userRoutes.post('/auth/init', requireAuth, async (req: Request, res: Response) => {
+  try {
+    const { userId, userEmail } = req as AuthenticatedRequest;
+    const user = await ensureUser(userId, userEmail);
+    res.json({ success: true, user });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'Unknown error';
+    res.status(500).json({ error: message });
+  }
+});
+
+/**
  * POST /api/set-email
  * Set the user's email address and optionally frequency
  */
-userRoutes.post('/set-email', async (req: Request, res: Response) => {
+userRoutes.post('/set-email', requireAuth, async (req: Request, res: Response) => {
   try {
+    const { userId } = req as AuthenticatedRequest;
     const { email, email_frequency } = req.body;
 
     if (!email || typeof email !== 'string' || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
@@ -33,7 +51,7 @@ userRoutes.post('/set-email', async (req: Request, res: Response) => {
       ? email_frequency
       : undefined;
 
-    const user = await setUserEmail(email, freq);
+    const user = await setUserEmail(userId, email, freq);
     res.json({ success: true, user });
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Unknown error';
@@ -44,8 +62,9 @@ userRoutes.post('/set-email', async (req: Request, res: Response) => {
 /**
  * POST /api/set-email-frequency
  */
-userRoutes.post('/set-email-frequency', async (req: Request, res: Response) => {
+userRoutes.post('/set-email-frequency', requireAuth, async (req: Request, res: Response) => {
   try {
+    const { userId } = req as AuthenticatedRequest;
     const { email_frequency } = req.body;
 
     if (!email_frequency || !VALID_FREQUENCIES.includes(email_frequency)) {
@@ -55,7 +74,7 @@ userRoutes.post('/set-email-frequency', async (req: Request, res: Response) => {
       return;
     }
 
-    await setEmailFrequency(email_frequency);
+    await setEmailFrequency(userId, email_frequency);
     res.json({ success: true, email_frequency });
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Unknown error';
@@ -66,9 +85,10 @@ userRoutes.post('/set-email-frequency', async (req: Request, res: Response) => {
 /**
  * GET /api/user-settings
  */
-userRoutes.get('/user-settings', async (_req: Request, res: Response) => {
+userRoutes.get('/user-settings', requireAuth, async (req: Request, res: Response) => {
   try {
-    const settings = await getUserSettings();
+    const { userId } = req as AuthenticatedRequest;
+    const settings = await getUserSettings(userId);
     res.json(settings);
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Unknown error';
@@ -77,9 +97,10 @@ userRoutes.get('/user-settings', async (_req: Request, res: Response) => {
 });
 
 // Backward compat
-userRoutes.get('/user-email', async (_req: Request, res: Response) => {
+userRoutes.get('/user-email', requireAuth, async (req: Request, res: Response) => {
   try {
-    const settings = await getUserSettings();
+    const { userId } = req as AuthenticatedRequest;
+    const settings = await getUserSettings(userId);
     res.json({ email: settings.email });
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Unknown error';

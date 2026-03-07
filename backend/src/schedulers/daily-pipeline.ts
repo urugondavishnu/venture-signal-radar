@@ -3,7 +3,7 @@ import { getCompanies, updateLastAgentRun } from '../services/company-service';
 import { storeSignals } from '../services/signal-service';
 import { generateReportFromFindings, storeReport } from '../services/report-service';
 import { sendReportEmail } from '../services/email-service';
-import { getUserSettings } from '../services/user-service';
+import { getAllUsers } from '../services/user-service';
 import { runIntelligenceAgentsSilent } from '../agents/orchestrator';
 
 const FREQUENCY_INTERVAL_DAYS: Record<string, number> = {
@@ -26,84 +26,83 @@ function shouldRunToday(frequency: string, lastRun: string | null): boolean {
 
 /**
  * Scheduled Intelligence Pipeline
- * Runs at 7:00 AM every day, respects the user's email_frequency setting
- * For each tracked company: runs agents, collects signals, generates report, sends email
+ * Runs at 7:00 AM every day for ALL users, respects each user's email_frequency setting
  */
 export function startScheduler(): void {
-  // Run at 7:00 AM daily
   cron.schedule('0 7 * * *', async () => {
-    console.log('[Scheduler] Starting intelligence pipeline...');
+    console.log('[Scheduler] Starting intelligence pipeline for all users...');
 
     try {
-      const settings = await getUserSettings();
-      const { email, email_frequency } = settings;
+      const users = await getAllUsers();
 
-      if (email_frequency === 'only_on_run') {
-        console.log('[Scheduler] Frequency set to "only on run". Skipping.');
+      if (users.length === 0) {
+        console.log('[Scheduler] No users found. Skipping.');
         return;
       }
 
-      const companies = await getCompanies();
+      for (const user of users) {
+        const { user_id, email, email_frequency } = user;
 
-      if (companies.length === 0) {
-        console.log('[Scheduler] No tracked companies. Skipping.');
-        return;
-      }
+        if (email_frequency === 'only_on_run') {
+          console.log(`[Scheduler] User ${email}: frequency "only_on_run". Skipping.`);
+          continue;
+        }
 
-      // Check if it's time to run based on the earliest last_agent_run
-      const earliestRun = companies
-        .map((c) => c.last_agent_run)
-        .filter(Boolean)
-        .sort()[0] || null;
+        const companies = await getCompanies(user_id);
 
-      if (!shouldRunToday(email_frequency, earliestRun)) {
-        console.log(`[Scheduler] Not time yet (frequency: ${email_frequency}). Skipping.`);
-        return;
-      }
+        if (companies.length === 0) {
+          console.log(`[Scheduler] User ${email}: no tracked companies. Skipping.`);
+          continue;
+        }
 
-      console.log(`[Scheduler] Processing ${companies.length} companies (frequency: ${email_frequency})...`);
+        const earliestRun = companies
+          .map((c) => c.last_agent_run)
+          .filter(Boolean)
+          .sort()[0] || null;
 
-      // Process companies sequentially to avoid overwhelming TinyFish API
-      for (const company of companies) {
-        try {
-          console.log(`[Scheduler] Running agents for: ${company.company_name}`);
+        if (!shouldRunToday(email_frequency, earliestRun)) {
+          console.log(`[Scheduler] User ${email}: not time yet (frequency: ${email_frequency}). Skipping.`);
+          continue;
+        }
 
-          // Run all intelligence agents (no SSE)
-          const findings = await runIntelligenceAgentsSilent(company);
+        console.log(`[Scheduler] Processing ${companies.length} companies for user ${email} (frequency: ${email_frequency})...`);
 
-          // Store signals (fire and forget — don't block report)
-          storeSignals(company.company_id, findings).catch((err) =>
-            console.error(`[Scheduler] Signal store failed for ${company.company_name}:`, err),
-          );
+        for (const company of companies) {
+          try {
+            console.log(`[Scheduler] Running agents for: ${company.company_name} (user: ${email})`);
 
-          // Update last run
-          await updateLastAgentRun(company.company_id);
+            const findings = await runIntelligenceAgentsSilent(company);
 
-          // Generate report directly from findings (not DB round-trip)
-          const reportData = generateReportFromFindings(company, findings);
-          await storeReport(company.company_id, reportData);
+            storeSignals(company.company_id, findings).catch((err) =>
+              console.error(`[Scheduler] Signal store failed for ${company.company_name}:`, err),
+            );
 
-          // Send email if configured
-          if (email) {
-            await sendReportEmail(email, company, reportData);
+            await updateLastAgentRun(company.company_id);
+
+            const reportData = generateReportFromFindings(company, findings);
+            await storeReport(company.company_id, reportData, user_id);
+
+            if (email) {
+              await sendReportEmail(email, company, reportData);
+            }
+
+            console.log(
+              `[Scheduler] Completed: ${company.company_name} (${findings.length} signals)`,
+            );
+          } catch (err) {
+            console.error(
+              `[Scheduler] Error processing ${company.company_name}:`,
+              err,
+            );
           }
-
-          console.log(
-            `[Scheduler] Completed: ${company.company_name} (${findings.length} signals)`,
-          );
-        } catch (err) {
-          console.error(
-            `[Scheduler] Error processing ${company.company_name}:`,
-            err,
-          );
         }
       }
 
-      console.log('[Scheduler] Pipeline complete.');
+      console.log('[Scheduler] Pipeline complete for all users.');
     } catch (err) {
       console.error('[Scheduler] Pipeline failed:', err);
     }
   });
 
-  console.log('[Scheduler] Intelligence pipeline scheduled (7:00 AM, respects frequency setting)');
+  console.log('[Scheduler] Intelligence pipeline scheduled (7:00 AM, per-user frequency)');
 }
