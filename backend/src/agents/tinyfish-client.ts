@@ -4,7 +4,7 @@
  */
 
 const TINYFISH_API_URL = 'https://agent.tinyfish.ai/v1/automation/run-sse';
-const AGENT_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes per agent
+const AGENT_TIMEOUT_MS = 8 * 60 * 1000; // 8 minutes per agent
 
 export interface TinyfishCallbacks {
   onConnecting: () => void;
@@ -35,10 +35,26 @@ export function startTinyfishAgent(
     return controller;
   }
 
+  // Accumulate information collected during the agent's browsing session.
+  // If timeout fires before COMPLETE, we return whatever was gathered.
+  const collectedSteps: string[] = [];
+  let completedNormally = false;
+
   const timeout = setTimeout(() => {
     controller.abort();
-    // On timeout, treat as complete with 0 results instead of showing an error
-    callbacks.onComplete({ signals: [] });
+    if (!completedNormally) {
+      // Build partial result from accumulated browsing steps
+      const signals: Array<{ signal_type: string; title: string; summary: string; source: string }> = [];
+      if (collectedSteps.length > 0) {
+        signals.push({
+          signal_type: 'partial_collection',
+          title: `Partial data collected (timed out after 8 min)`,
+          summary: collectedSteps.slice(-10).join(' | '),
+          source: 'agent_timeout',
+        });
+      }
+      callbacks.onComplete({ signals });
+    }
   }, AGENT_TIMEOUT_MS);
 
   callbacks.onConnecting();
@@ -88,10 +104,11 @@ export function startTinyfishAgent(
               callbacks.onBrowsing('Agent is browsing the website...');
             }
 
-            // Step / status updates
+            // Step / status updates — accumulate for partial results on timeout
             if (data.type === 'STEP' || data.purpose || data.action) {
               const message =
                 data.message || data.purpose || data.action || 'Processing...';
+              collectedSteps.push(message);
               callbacks.onStatus(message);
             }
 
@@ -100,6 +117,7 @@ export function startTinyfishAgent(
               (data.type === 'COMPLETE' || data.status === 'COMPLETED') &&
               data.resultJson
             ) {
+              completedNormally = true;
               let result: unknown;
               try {
                 result =
