@@ -15,6 +15,7 @@ import {
   ReportData,
   getCompanies,
   runAgentsSSE,
+  stopRun,
 } from './api/client';
 
 // ---------- localStorage persistence ----------
@@ -67,6 +68,7 @@ export function App() {
 
   const runQueueRef = useRef<QueueEntry[]>([]);
   const runningCountRef = useRef(0);
+  const abortControllersRef = useRef<Map<string, AbortController>>(new Map());
 
   // Persist to localStorage on change
   useEffect(() => saveToStorage(STORAGE_KEYS.activeRuns, activeRuns), [activeRuns]);
@@ -128,7 +130,7 @@ export function App() {
       processQueue();
     };
 
-    runAgentsSSE(
+    const controller = runAgentsSSE(
       company.company_id,
       (event) => {
         const { type, data } = event;
@@ -173,6 +175,7 @@ export function App() {
             );
             break;
           case 'pipeline_complete':
+            abortControllersRef.current.delete(company.company_id);
             setActiveRuns((prev) =>
               prev.map((r) =>
                 r.companyId === company.company_id ? { ...r, isComplete: true } : r,
@@ -185,6 +188,7 @@ export function App() {
       },
       () => {
         // SSE stream ended — force complete if not already
+        abortControllersRef.current.delete(company.company_id);
         setActiveRuns((prev) =>
           prev.map((r) => {
             if (r.companyId !== company.company_id || r.isComplete) return r;
@@ -201,6 +205,7 @@ export function App() {
       },
       (err) => {
         console.error('Agent run error:', err);
+        abortControllersRef.current.delete(company.company_id);
         setActiveRuns((prev) =>
           prev.map((r) =>
             r.companyId === company.company_id ? { ...r, isComplete: true } : r,
@@ -209,6 +214,8 @@ export function App() {
         onRunComplete();
       },
     );
+
+    abortControllersRef.current.set(company.company_id, controller);
   }, [processQueue]);
 
   // ---------- Enqueue a company run ----------
@@ -240,6 +247,50 @@ export function App() {
       runQueueRef.current.push({ company });
     }
   }, [executeRun]);
+
+  const handleStopRun = useCallback(async (companyId: string) => {
+    // Abort the SSE connection
+    const controller = abortControllersRef.current.get(companyId);
+    if (controller) {
+      controller.abort();
+      abortControllersRef.current.delete(companyId);
+    }
+
+    // Collect partial findings from completed agents
+    const run = activeRunsRef.current.find((r) => r.companyId === companyId);
+    const findings = (run?.agents || [])
+      .filter((a) => a.status === 'complete' && a.findings?.signals)
+      .flatMap((a) => a.findings!.signals);
+
+    // Mark as complete immediately so UI updates
+    setActiveRuns((prev) =>
+      prev.map((r) =>
+        r.companyId === companyId ? { ...r, isComplete: true } : r,
+      ),
+    );
+    runningCountRef.current--;
+    processQueue();
+
+    // Generate report + send email on backend
+    try {
+      const result = await stopRun(companyId, findings);
+      setActiveRuns((prev) =>
+        prev.map((r) =>
+          r.companyId === companyId
+            ? { ...r, liveReport: result.report_data, emailSent: result.email_sent }
+            : r,
+        ),
+      );
+      setReportReload((n) => n + 1);
+    } catch (err) {
+      console.error('Stop run failed:', err);
+    }
+  }, [processQueue]);
+
+  const handleRemoveQueued = useCallback((companyId: string) => {
+    runQueueRef.current = runQueueRef.current.filter((q) => q.company.company_id !== companyId);
+    setActiveRuns((prev) => prev.filter((r) => r.companyId !== companyId));
+  }, []);
 
   const handleDismissRun = useCallback((companyId: string) => {
     runQueueRef.current = runQueueRef.current.filter((q) => q.company.company_id !== companyId);
@@ -296,7 +347,12 @@ export function App() {
           />
         )}
         {activeTab === 'active-runs' && (
-          <ActiveRunsTab activeRuns={activeRuns} onDismiss={handleDismissRun} />
+          <ActiveRunsTab
+            activeRuns={activeRuns}
+            onDismiss={handleDismissRun}
+            onStop={handleStopRun}
+            onRemoveQueued={handleRemoveQueued}
+          />
         )}
         {activeTab === 'reports' && <ReportsTab triggerReload={reportReload} />}
         {activeTab === 'settings' && <SettingsTab />}

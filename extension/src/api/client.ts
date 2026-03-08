@@ -142,6 +142,25 @@ export async function setEmailFrequency(frequency: EmailFrequency): Promise<void
   });
 }
 
+export interface StopRunResult {
+  report_id: string;
+  report_data: ReportData;
+  total_signals: number;
+  email_sent: boolean;
+}
+
+export async function stopRun(
+  companyId: string,
+  findings: Array<{ signal_type: string; title: string; summary: string; source: string; url?: string }>,
+): Promise<StopRunResult> {
+  const res = await authFetch(`${API_BASE}/stop-run`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ company_id: companyId, findings }),
+  });
+  return res.json();
+}
+
 // ---------- SSE Helpers ----------
 
 export { getAuthHeaders };

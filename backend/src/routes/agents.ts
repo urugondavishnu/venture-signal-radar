@@ -121,6 +121,71 @@ agentRoutes.post('/run-agents', requireAuth, async (req: Request, res: Response)
 });
 
 /**
+ * POST /api/stop-run
+ * Stop a running pipeline early, generate report from partial findings, send email.
+ */
+agentRoutes.post('/stop-run', requireAuth, async (req: Request, res: Response) => {
+  try {
+    const { userId, userEmail } = req as AuthenticatedRequest;
+    const { company_id, findings } = req.body;
+
+    if (!company_id) {
+      res.status(400).json({ error: 'company_id is required' });
+      return;
+    }
+
+    await ensureUser(userId, userEmail);
+
+    const company = await getCompanyById(company_id);
+    if (!company) {
+      res.status(404).json({ error: 'Company not found' });
+      return;
+    }
+
+    const signalFindings = (findings || []).map((f: Record<string, string>) => ({
+      signal_type: f.signal_type || 'general_news',
+      title: f.title || '',
+      summary: f.summary || '',
+      source: f.source || '',
+      url: f.url || undefined,
+    }));
+
+    // Store signals
+    storeSignals(company.company_id, signalFindings).catch((err) =>
+      console.error('[StopRun] Signal store failed:', err),
+    );
+
+    await updateLastAgentRun(company.company_id);
+
+    // Generate and store report
+    const reportData = generateReportFromFindings(company, signalFindings);
+    const report = await storeReport(company.company_id, reportData, userId);
+
+    // Send email
+    let emailSent = false;
+    try {
+      const settings = await getUserSettings(userId);
+      const emailTo = settings.email || userEmail;
+      if (emailTo) {
+        emailSent = await sendReportEmail(emailTo, company, reportData);
+      }
+    } catch (emailErr) {
+      console.error(`[StopRun] Email failed for ${company.company_name}:`, emailErr);
+    }
+
+    res.json({
+      report_id: report.report_id,
+      report_data: reportData,
+      total_signals: signalFindings.length,
+      email_sent: emailSent,
+    });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'Unknown error';
+    res.status(500).json({ error: message });
+  }
+});
+
+/**
  * GET /api/agent-status/:company_id
  */
 agentRoutes.get('/agent-status/:company_id', requireAuth, async (req: Request, res: Response) => {

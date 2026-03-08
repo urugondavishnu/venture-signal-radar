@@ -15,6 +15,7 @@ import {
   ReportData,
   getCompanies,
   runAgentsSSE,
+  stopRun,
 } from '../api/client';
 import '../styles/global.css';
 
@@ -55,6 +56,7 @@ export function App() {
   activeRunsRef.current = activeRuns;
   const runQueueRef = useRef<QueueEntry[]>([]);
   const runningCountRef = useRef(0);
+  const abortControllersRef = useRef<Map<string, AbortController>>(new Map());
 
   useEffect(() => saveToStorage('vsr_active_runs', activeRuns), [activeRuns]);
   useEffect(() => saveToStorage('vsr_active_tab', activeTab), [activeTab]);
@@ -98,7 +100,7 @@ export function App() {
       processQueue();
     };
 
-    runAgentsSSE(
+    const controller = runAgentsSSE(
       company.company_id,
       (event) => {
         const { type, data } = event;
@@ -135,6 +137,7 @@ export function App() {
             );
             break;
           case 'pipeline_complete':
+            abortControllersRef.current.delete(company.company_id);
             setActiveRuns((prev) =>
               prev.map((r) => r.companyId === company.company_id ? { ...r, isComplete: true } : r),
             );
@@ -144,6 +147,7 @@ export function App() {
         }
       },
       () => {
+        abortControllersRef.current.delete(company.company_id);
         setActiveRuns((prev) =>
           prev.map((r) => {
             if (r.companyId !== company.company_id || r.isComplete) return r;
@@ -160,12 +164,15 @@ export function App() {
       },
       (err) => {
         console.error('Agent run error:', err);
+        abortControllersRef.current.delete(company.company_id);
         setActiveRuns((prev) =>
           prev.map((r) => r.companyId === company.company_id ? { ...r, isComplete: true } : r),
         );
         onRunComplete();
       },
     );
+
+    abortControllersRef.current.set(company.company_id, controller);
   }, [processQueue]);
 
   const handleRunCompany = useCallback((company: Company) => {
@@ -192,6 +199,46 @@ export function App() {
       runQueueRef.current.push({ company });
     }
   }, [executeRun]);
+
+  const handleStopRun = useCallback(async (companyId: string) => {
+    const controller = abortControllersRef.current.get(companyId);
+    if (controller) {
+      controller.abort();
+      abortControllersRef.current.delete(companyId);
+    }
+
+    const run = activeRunsRef.current.find((r) => r.companyId === companyId);
+    const findings = (run?.agents || [])
+      .filter((a) => a.status === 'complete' && a.findings?.signals)
+      .flatMap((a) => a.findings!.signals);
+
+    setActiveRuns((prev) =>
+      prev.map((r) =>
+        r.companyId === companyId ? { ...r, isComplete: true } : r,
+      ),
+    );
+    runningCountRef.current--;
+    processQueue();
+
+    try {
+      const result = await stopRun(companyId, findings);
+      setActiveRuns((prev) =>
+        prev.map((r) =>
+          r.companyId === companyId
+            ? { ...r, liveReport: result.report_data, emailSent: result.email_sent }
+            : r,
+        ),
+      );
+      setReportReload((n) => n + 1);
+    } catch (err) {
+      console.error('Stop run failed:', err);
+    }
+  }, [processQueue]);
+
+  const handleRemoveQueued = useCallback((companyId: string) => {
+    runQueueRef.current = runQueueRef.current.filter((q) => q.company.company_id !== companyId);
+    setActiveRuns((prev) => prev.filter((r) => r.companyId !== companyId));
+  }, []);
 
   const handleDismissRun = useCallback((companyId: string) => {
     runQueueRef.current = runQueueRef.current.filter((q) => q.company.company_id !== companyId);
@@ -239,7 +286,12 @@ export function App() {
           />
         )}
         {activeTab === 'active-runs' && (
-          <ActiveRunsTab activeRuns={activeRuns} onDismiss={handleDismissRun} />
+          <ActiveRunsTab
+            activeRuns={activeRuns}
+            onDismiss={handleDismissRun}
+            onStop={handleStopRun}
+            onRemoveQueued={handleRemoveQueued}
+          />
         )}
         {activeTab === 'reports' && <ReportsTab triggerReload={reportReload} />}
         {activeTab === 'settings' && <SettingsTab />}

@@ -5,9 +5,11 @@ import { AgentCard } from '../components/AgentCard';
 interface ActiveRunsTabProps {
   activeRuns: ActiveRun[];
   onDismiss: (companyId: string) => void;
+  onStop: (companyId: string) => void;
+  onRemoveQueued: (companyId: string) => void;
 }
 
-export function ActiveRunsTab({ activeRuns, onDismiss }: ActiveRunsTabProps) {
+export function ActiveRunsTab({ activeRuns, onDismiss, onStop, onRemoveQueued }: ActiveRunsTabProps) {
   const [selectedCompany, setSelectedCompany] = useState<string | null>(
     activeRuns[0]?.companyId || null,
   );
@@ -57,18 +59,42 @@ export function ActiveRunsTab({ activeRuns, onDismiss }: ActiveRunsTabProps) {
         <div>
           <div className="run-header">
             <div style={{ fontSize: 14, fontWeight: 600 }}>{selectedRun.companyName}</div>
-            {selectedRun.isComplete && (
-              <button
-                className="btn btn-success btn-sm"
-                onClick={() => {
-                  onDismiss(selectedRun.companyId);
-                  const remaining = activeRuns.filter((r) => r.companyId !== selectedRun.companyId);
-                  setSelectedCompany(remaining[0]?.companyId || null);
-                }}
-              >
-                Dismiss
-              </button>
-            )}
+            <div style={{ display: 'flex', gap: 8 }}>
+              {selectedRun.queued && (
+                <button
+                  className="btn btn-sm"
+                  style={{ background: '#ef4444', color: '#fff' }}
+                  onClick={() => {
+                    onRemoveQueued(selectedRun.companyId);
+                    const remaining = activeRuns.filter((r) => r.companyId !== selectedRun.companyId);
+                    setSelectedCompany(remaining[0]?.companyId || null);
+                  }}
+                >
+                  Remove
+                </button>
+              )}
+              {!selectedRun.isComplete && !selectedRun.queued && (
+                <button
+                  className="btn btn-sm"
+                  style={{ background: '#f59e0b', color: '#fff' }}
+                  onClick={() => onStop(selectedRun.companyId)}
+                >
+                  Stop
+                </button>
+              )}
+              {selectedRun.isComplete && (
+                <button
+                  className="btn btn-success btn-sm"
+                  onClick={() => {
+                    onDismiss(selectedRun.companyId);
+                    const remaining = activeRuns.filter((r) => r.companyId !== selectedRun.companyId);
+                    setSelectedCompany(remaining[0]?.companyId || null);
+                  }}
+                >
+                  Dismiss
+                </button>
+              )}
+            </div>
           </div>
 
           {selectedRun.emailSent && (
