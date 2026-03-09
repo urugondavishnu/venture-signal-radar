@@ -4,7 +4,7 @@
   "version": "1.0.0",
   "description": "Track startups with one click and receive daily intelligence updates",
   "permissions": ["activeTab", "storage", "tabs", "alarms", "sidePanel"],
-  "host_permissions": ["https://venture-signal-radar.onrender.com/*"],
+  "host_permissions": ["https://venture-signal-radar-r1tq.onrender.com/*"],
   "side_panel": {
     "default_path": "sidepanel.html"
   },
