@@ -75,20 +75,20 @@ export function App() {
     init();
   }, [user]);
 
-  // Reconcile stale active runs on reopen — check if backend completed while panel was closed
+  // Reconcile stale active runs — poll every 30s until all incomplete runs have reports
   useEffect(() => {
     if (!user) return;
-    const incompleteRuns = activeRunsRef.current.filter((r) => !r.isComplete);
-    if (incompleteRuns.length === 0) return;
 
     const reconcile = async () => {
+      const incompleteRuns = activeRunsRef.current.filter((r) => !r.isComplete && !abortControllersRef.current.has(r.companyId));
+      if (incompleteRuns.length === 0) return;
+
       let changed = false;
       const updated = [...activeRunsRef.current];
 
       for (const run of incompleteRuns) {
         try {
           const reports = await getReports(run.companyId);
-          // If a report exists that was generated after the run started, it's done
           const matchingReport = reports.find(
             (r) => new Date(r.generated_at).getTime() > run.startedAt,
           );
@@ -118,7 +118,10 @@ export function App() {
       }
     };
 
+    // Run immediately on mount, then poll every 30s
     reconcile();
+    const interval = setInterval(reconcile, 30_000);
+    return () => clearInterval(interval);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user]);
 
