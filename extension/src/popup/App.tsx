@@ -14,6 +14,7 @@ import {
   AgentState,
   ReportData,
   getCompanies,
+  getReports,
   runAgentsSSE,
   stopRun,
 } from '../api/client';
@@ -72,6 +73,53 @@ export function App() {
       }
     };
     init();
+  }, [user]);
+
+  // Reconcile stale active runs on reopen — check if backend completed while panel was closed
+  useEffect(() => {
+    if (!user) return;
+    const incompleteRuns = activeRunsRef.current.filter((r) => !r.isComplete);
+    if (incompleteRuns.length === 0) return;
+
+    const reconcile = async () => {
+      let changed = false;
+      const updated = [...activeRunsRef.current];
+
+      for (const run of incompleteRuns) {
+        try {
+          const reports = await getReports(run.companyId);
+          // If a report exists that was generated after the run started, it's done
+          const matchingReport = reports.find(
+            (r) => new Date(r.generated_at).getTime() > run.startedAt,
+          );
+          if (matchingReport) {
+            const idx = updated.findIndex((r) => r.companyId === run.companyId);
+            if (idx >= 0) {
+              updated[idx] = {
+                ...updated[idx],
+                isComplete: true,
+                queued: false,
+                liveReport: matchingReport.report_data,
+                agents: updated[idx].agents.map((a) =>
+                  a.status !== 'complete' && a.status !== 'error'
+                    ? { ...a, status: 'complete' as const, findings: { signals: [] }, message: 'Completed while panel was closed' }
+                    : a,
+                ),
+              };
+              changed = true;
+            }
+          }
+        } catch { /* ignore per-company errors */ }
+      }
+
+      if (changed) {
+        setActiveRuns(updated);
+        setReportReload((n) => n + 1);
+      }
+    };
+
+    reconcile();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user]);
 
   const refreshCompanies = useCallback(async () => {
