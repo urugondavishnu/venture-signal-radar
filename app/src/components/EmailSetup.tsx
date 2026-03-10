@@ -34,7 +34,7 @@ export function EmailSetup({ onComplete }: EmailSetupProps) {
       <div className="setup-card">
         <div className="setup-header">
           <span className="setup-icon">📡</span>
-          <h1>Venture Signal Radar</h1>
+          <h1>Daily Delta</h1>
           <p className="setup-subtitle">Startup Intelligence Platform</p>
         </div>
 

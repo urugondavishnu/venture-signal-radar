@@ -1,4 +1,6 @@
-import { supabase } from '../db/supabase';
+import { eq } from 'drizzle-orm';
+import { db } from '../db/drizzle';
+import { users } from '../db/schema';
 import { User } from '../types';
 
 export type EmailFrequency = 'daily' | 'every_3_days' | 'weekly' | 'monthly' | 'only_on_run';
@@ -7,22 +9,21 @@ export type EmailFrequency = 'daily' | 'every_3_days' | 'weekly' | 'monthly' | '
  * Ensure a user record exists in the users table (called on first auth)
  */
 export async function ensureUser(userId: string, email: string): Promise<User> {
-  const { data: existing } = await supabase
-    .from('users')
-    .select('*')
-    .eq('user_id', userId)
-    .single();
-
-  if (existing) return existing as User;
-
-  const { data, error } = await supabase
-    .from('users')
-    .upsert({ user_id: userId, email }, { onConflict: 'email' })
+  const existing = await db
     .select()
-    .single();
+    .from(users)
+    .where(eq(users.user_id, userId))
+    .limit(1);
 
-  if (error) throw new Error(`Failed to create user: ${error.message}`);
-  return data as User;
+  if (existing.length > 0) return rowToUser(existing[0]);
+
+  const [inserted] = await db
+    .insert(users)
+    .values({ user_id: userId, email })
+    .onConflictDoUpdate({ target: users.email, set: { user_id: userId } })
+    .returning();
+
+  return rowToUser(inserted);
 }
 
 /**
@@ -33,47 +34,42 @@ export async function setUserEmail(
   email: string,
   emailFrequency?: EmailFrequency,
 ): Promise<User> {
-  const updates: Record<string, unknown> = { email };
-  if (emailFrequency) {
-    updates.email_frequency = emailFrequency;
-  }
-
   await ensureUser(userId, email);
 
-  const { data, error } = await supabase
-    .from('users')
-    .update(updates)
-    .eq('user_id', userId)
-    .select()
-    .single();
+  const updates: Record<string, unknown> = { email };
+  if (emailFrequency) updates.email_frequency = emailFrequency;
 
-  if (error) throw new Error(`Failed to update email: ${error.message}`);
-  return data as User;
+  const [updated] = await db
+    .update(users)
+    .set(updates)
+    .where(eq(users.user_id, userId))
+    .returning();
+
+  if (!updated) throw new Error('Failed to update email');
+  return rowToUser(updated);
 }
 
 /**
  * Update only email frequency
  */
 export async function setEmailFrequency(userId: string, frequency: EmailFrequency): Promise<void> {
-  const { error } = await supabase
-    .from('users')
-    .update({ email_frequency: frequency })
-    .eq('user_id', userId);
-
-  if (error) throw new Error(`Failed to update frequency: ${error.message}`);
+  await db
+    .update(users)
+    .set({ email_frequency: frequency })
+    .where(eq(users.user_id, userId));
 }
 
 /**
  * Get user email
  */
 export async function getUserEmail(userId: string): Promise<string | null> {
-  const { data } = await supabase
-    .from('users')
-    .select('email')
-    .eq('user_id', userId)
-    .single();
+  const rows = await db
+    .select({ email: users.email })
+    .from(users)
+    .where(eq(users.user_id, userId))
+    .limit(1);
 
-  return data?.email || null;
+  return rows[0]?.email ?? null;
 }
 
 /**
@@ -83,15 +79,15 @@ export async function getUserSettings(userId: string): Promise<{
   email: string | null;
   email_frequency: EmailFrequency;
 }> {
-  const { data } = await supabase
-    .from('users')
-    .select('email, email_frequency')
-    .eq('user_id', userId)
-    .single();
+  const rows = await db
+    .select({ email: users.email, email_frequency: users.email_frequency })
+    .from(users)
+    .where(eq(users.user_id, userId))
+    .limit(1);
 
   return {
-    email: data?.email || null,
-    email_frequency: (data?.email_frequency as EmailFrequency) || 'daily',
+    email: rows[0]?.email ?? null,
+    email_frequency: (rows[0]?.email_frequency as EmailFrequency) ?? 'daily',
   };
 }
 
@@ -99,10 +95,25 @@ export async function getUserSettings(userId: string): Promise<{
  * Get all users (for scheduler)
  */
 export async function getAllUsers(): Promise<Array<{ user_id: string; email: string; email_frequency: EmailFrequency }>> {
-  const { data, error } = await supabase
-    .from('users')
-    .select('user_id, email, email_frequency');
+  const rows = await db
+    .select({
+      user_id: users.user_id,
+      email: users.email,
+      email_frequency: users.email_frequency,
+    })
+    .from(users);
 
-  if (error) return [];
-  return (data || []) as Array<{ user_id: string; email: string; email_frequency: EmailFrequency }>;
+  return rows.map((r) => ({
+    user_id: r.user_id,
+    email: r.email,
+    email_frequency: (r.email_frequency as EmailFrequency) ?? 'daily',
+  }));
+}
+
+function rowToUser(row: typeof users.$inferSelect): User {
+  return {
+    user_id: row.user_id,
+    email: row.email,
+    created_at: row.created_at?.toISOString() ?? new Date().toISOString(),
+  };
 }

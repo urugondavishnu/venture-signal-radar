@@ -1,6 +1,6 @@
 {
   "manifest_version": 3,
-  "name": "Venture Signal Tracker",
+  "name": "Daily Delta",
   "version": "1.0.0",
   "description": "Track startups with one click and receive daily intelligence updates",
   "permissions": ["activeTab", "storage", "tabs", "alarms", "sidePanel"],
@@ -9,7 +9,7 @@
     "default_path": "sidepanel.html"
   },
   "action": {
-    "default_title": "Venture Signal Tracker",
+    "default_title": "Daily Delta",
     "default_icon": {
       "16": "icons/icon16.png",
       "48": "icons/icon48.png",

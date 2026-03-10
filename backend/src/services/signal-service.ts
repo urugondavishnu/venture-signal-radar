@@ -1,5 +1,7 @@
 import { v4 as uuidv4 } from 'uuid';
-import { supabase } from '../db/supabase';
+import { eq, desc, gte, and } from 'drizzle-orm';
+import { db } from '../db/drizzle';
+import { signals } from '../db/schema';
 import { Signal, SignalFinding } from '../types';
 
 /**
@@ -11,7 +13,7 @@ export async function storeSignals(
 ): Promise<Signal[]> {
   if (findings.length === 0) return [];
 
-  const signals = findings.map((f) => ({
+  const rows = findings.map((f) => ({
     signal_id: uuidv4(),
     company_id: companyId,
     signal_type: f.signal_type,
@@ -19,20 +21,16 @@ export async function storeSignals(
     title: f.title,
     content: f.summary,
     url: f.url || null,
-    detected_at: new Date().toISOString(),
+    detected_at: new Date(),
   }));
 
-  const { data, error } = await supabase
-    .from('signals')
-    .insert(signals)
-    .select();
-
-  if (error) {
-    console.error(`[Signals] Failed to store signals: ${error.message}`);
+  try {
+    const inserted = await db.insert(signals).values(rows).returning();
+    return inserted.map(rowToSignal);
+  } catch (err) {
+    console.error(`[Signals] Failed to store signals:`, err);
     return [];
   }
-
-  return (data || []) as Signal[];
 }
 
 /**
@@ -42,15 +40,18 @@ export async function getSignalsForCompany(
   companyId: string,
   limit = 50,
 ): Promise<Signal[]> {
-  const { data, error } = await supabase
-    .from('signals')
-    .select('*')
-    .eq('company_id', companyId)
-    .order('detected_at', { ascending: false })
-    .limit(limit);
+  try {
+    const rows = await db
+      .select()
+      .from(signals)
+      .where(eq(signals.company_id, companyId))
+      .orderBy(desc(signals.detected_at))
+      .limit(limit);
 
-  if (error) return [];
-  return (data || []) as Signal[];
+    return rows.map(rowToSignal);
+  } catch {
+    return [];
+  }
 }
 
 /**
@@ -60,13 +61,33 @@ export async function getSignalsSince(
   companyId: string,
   since: string,
 ): Promise<Signal[]> {
-  const { data, error } = await supabase
-    .from('signals')
-    .select('*')
-    .eq('company_id', companyId)
-    .gte('detected_at', since)
-    .order('detected_at', { ascending: false });
+  try {
+    const rows = await db
+      .select()
+      .from(signals)
+      .where(
+        and(
+          eq(signals.company_id, companyId),
+          gte(signals.detected_at, new Date(since)),
+        ),
+      )
+      .orderBy(desc(signals.detected_at));
 
-  if (error) return [];
-  return (data || []) as Signal[];
+    return rows.map(rowToSignal);
+  } catch {
+    return [];
+  }
+}
+
+function rowToSignal(row: typeof signals.$inferSelect): Signal {
+  return {
+    signal_id: row.signal_id,
+    company_id: row.company_id!,
+    signal_type: row.signal_type as Signal['signal_type'],
+    source: row.source,
+    title: row.title,
+    content: row.content,
+    url: row.url,
+    detected_at: row.detected_at?.toISOString() ?? new Date().toISOString(),
+  };
 }

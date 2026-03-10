@@ -9,7 +9,7 @@ export function Header({ email, onSignOut }: HeaderProps) {
       <div className="header-left">
         <span className="header-icon">📡</span>
         <div>
-          <h1 className="header-title">Venture Signal Radar</h1>
+          <h1 className="header-title">Daily Delta</h1>
           <p className="header-subtitle">Startup Intelligence Platform</p>
         </div>
       </div>

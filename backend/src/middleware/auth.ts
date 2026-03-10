@@ -1,5 +1,16 @@
 import { Request, Response, NextFunction } from 'express';
-import { getSupabase } from '../db/supabase';
+import { createRemoteJWKSet, jwtVerify } from 'jose';
+
+let _jwks: ReturnType<typeof createRemoteJWKSet> | null = null;
+
+function getJWKS() {
+  if (!_jwks) {
+    const url = process.env.SUPABASE_URL;
+    if (!url) return null;
+    _jwks = createRemoteJWKSet(new URL(`${url}/auth/v1/.well-known/jwks.json`));
+  }
+  return _jwks;
+}
 
 export interface AuthenticatedRequest extends Request {
   userId: string;
@@ -15,6 +26,13 @@ export async function requireAuth(
   res: Response,
   next: NextFunction,
 ): Promise<void> {
+  const JWKS = getJWKS();
+  if (!JWKS) {
+    console.error('[Auth] SUPABASE_URL is not set — cannot verify JWTs');
+    res.status(500).json({ error: 'Server auth not configured' });
+    return;
+  }
+
   const authHeader = req.headers.authorization;
 
   if (!authHeader || !authHeader.startsWith('Bearer ')) {
@@ -25,18 +43,13 @@ export async function requireAuth(
   const token = authHeader.slice(7);
 
   try {
-    const supabase = getSupabase();
-    const { data, error } = await supabase.auth.getUser(token);
+    const { payload } = await jwtVerify(token, JWKS);
 
-    if (error || !data.user) {
-      res.status(401).json({ error: 'Invalid or expired token' });
-      return;
-    }
-
-    (req as AuthenticatedRequest).userId = data.user.id;
-    (req as AuthenticatedRequest).userEmail = data.user.email || '';
+    (req as AuthenticatedRequest).userId = payload.sub!;
+    (req as AuthenticatedRequest).userEmail = (payload.email as string) || '';
     next();
-  } catch {
-    res.status(401).json({ error: 'Authentication failed' });
+  } catch (err) {
+    console.error('[Auth] JWT verification failed:', (err as Error).message);
+    res.status(401).json({ error: 'Invalid or expired token' });
   }
 }

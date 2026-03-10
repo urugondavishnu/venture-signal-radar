@@ -1,5 +1,7 @@
 import { v4 as uuidv4 } from 'uuid';
-import { supabase } from '../db/supabase';
+import { eq, and, desc } from 'drizzle-orm';
+import { db } from '../db/drizzle';
+import { companies, signals, reports } from '../db/schema';
 import { extractDomain, normalizeUrl, extractCompanyName } from '../utils/domain';
 import { Company, DiscoveryResult } from '../types';
 
@@ -15,36 +17,32 @@ export async function storeCompany(
   const domain = extractDomain(url);
 
   // Check if company already exists for this user + domain
-  const { data: existing } = await supabase
-    .from('companies')
-    .select('*')
-    .eq('user_id', userId)
-    .eq('domain', domain)
-    .single();
+  const existing = await db
+    .select()
+    .from(companies)
+    .where(and(eq(companies.user_id, userId), eq(companies.domain, domain)))
+    .limit(1);
 
-  if (existing) {
-    return existing as Company;
+  if (existing.length > 0) {
+    return rowToCompany(existing[0]);
   }
 
   const companyName = extractCompanyName(pageTitle, domain);
+  const companyId = uuidv4();
 
-  const newCompany: Partial<Company> = {
-    company_id: uuidv4(),
-    user_id: userId,
-    company_name: companyName,
-    website_url: url,
-    domain,
-    tracking_status: 'active',
-  };
+  const [inserted] = await db
+    .insert(companies)
+    .values({
+      company_id: companyId,
+      user_id: userId,
+      company_name: companyName,
+      website_url: url,
+      domain,
+      tracking_status: 'active',
+    })
+    .returning();
 
-  const { data, error } = await supabase
-    .from('companies')
-    .insert(newCompany)
-    .select()
-    .single();
-
-  if (error) throw new Error(`Failed to store company: ${error.message}`);
-  return data as Company;
+  return rowToCompany(inserted);
 }
 
 /**
@@ -54,83 +52,80 @@ export async function updateCompanyFromDiscovery(
   companyId: string,
   discovery: DiscoveryResult,
 ): Promise<Company> {
-  const updates: Partial<Company> = {
-    company_name: discovery.company_name || undefined,
-    description: discovery.description || undefined,
-    industry: discovery.industry || undefined,
-    founding_year: discovery.founding_year || undefined,
-    headquarters: discovery.headquarters || undefined,
-    company_size: discovery.company_size || undefined,
-    detected_products: discovery.products || undefined,
-    careers_url: discovery.careers_url || undefined,
-    blog_url: discovery.blog_url || undefined,
-    pricing_url: discovery.pricing_url || undefined,
-  };
+  const updates: Record<string, unknown> = {};
+  if (discovery.company_name) updates.company_name = discovery.company_name;
+  if (discovery.description) updates.description = discovery.description;
+  if (discovery.industry) updates.industry = discovery.industry;
+  if (discovery.founding_year) updates.founding_year = discovery.founding_year;
+  if (discovery.headquarters) updates.headquarters = discovery.headquarters;
+  if (discovery.company_size) updates.company_size = discovery.company_size;
+  if (discovery.products) updates.detected_products = discovery.products;
+  if (discovery.careers_url) updates.careers_url = discovery.careers_url;
+  if (discovery.blog_url) updates.blog_url = discovery.blog_url;
+  if (discovery.pricing_url) updates.pricing_url = discovery.pricing_url;
 
-  // Remove undefined values
-  const cleanUpdates = Object.fromEntries(
-    Object.entries(updates).filter(([, v]) => v !== undefined),
-  );
+  const [updated] = await db
+    .update(companies)
+    .set(updates)
+    .where(eq(companies.company_id, companyId))
+    .returning();
 
-  const { data, error } = await supabase
-    .from('companies')
-    .update(cleanUpdates)
-    .eq('company_id', companyId)
-    .select()
-    .single();
-
-  if (error) throw new Error(`Failed to update company: ${error.message}`);
-  return data as Company;
+  if (!updated) throw new Error('Failed to update company: not found');
+  return rowToCompany(updated);
 }
 
 /**
  * Get all tracked companies for a user
  */
 export async function getCompanies(userId: string): Promise<Company[]> {
-  const { data, error } = await supabase
-    .from('companies')
-    .select('*')
-    .eq('user_id', userId)
-    .eq('tracking_status', 'active')
-    .order('created_at', { ascending: false });
+  const rows = await db
+    .select()
+    .from(companies)
+    .where(and(eq(companies.user_id, userId), eq(companies.tracking_status, 'active')))
+    .orderBy(desc(companies.created_at));
 
-  if (error) throw new Error(`Failed to fetch companies: ${error.message}`);
-  return (data || []) as Company[];
+  return rows.map(rowToCompany);
 }
 
 /**
  * Get a single company by ID
  */
 export async function getCompanyById(companyId: string): Promise<Company | null> {
-  const { data, error } = await supabase
-    .from('companies')
-    .select('*')
-    .eq('company_id', companyId)
-    .single();
+  const rows = await db
+    .select()
+    .from(companies)
+    .where(eq(companies.company_id, companyId))
+    .limit(1);
 
-  if (error) return null;
-  return data as Company;
+  return rows.length > 0 ? rowToCompany(rows[0]) : null;
 }
 
 /**
  * Delete a company and its associated signals + reports
  */
 export async function deleteCompany(companyId: string): Promise<void> {
-  // Delete signals first (foreign key)
-  await supabase.from('signals').delete().eq('company_id', companyId);
-  // Delete reports
-  await supabase.from('reports').delete().eq('company_id', companyId);
-  // Delete the company
-  const { error } = await supabase.from('companies').delete().eq('company_id', companyId);
-  if (error) throw new Error(`Failed to delete company: ${error.message}`);
+  await db.delete(signals).where(eq(signals.company_id, companyId));
+  await db.delete(reports).where(eq(reports.company_id, companyId));
+  await db.delete(companies).where(eq(companies.company_id, companyId));
 }
 
 /**
  * Update last agent run timestamp
  */
 export async function updateLastAgentRun(companyId: string): Promise<void> {
-  await supabase
-    .from('companies')
-    .update({ last_agent_run: new Date().toISOString() })
-    .eq('company_id', companyId);
+  await db
+    .update(companies)
+    .set({ last_agent_run: new Date() })
+    .where(eq(companies.company_id, companyId));
+}
+
+// Map DB row to Company type (timestamps to ISO strings)
+function rowToCompany(row: typeof companies.$inferSelect): Company {
+  return {
+    ...row,
+    user_id: row.user_id!,
+    created_at: row.created_at?.toISOString() ?? new Date().toISOString(),
+    last_agent_run: row.last_agent_run?.toISOString() ?? null,
+    tracking_status: (row.tracking_status as Company['tracking_status']) ?? 'active',
+  };
 }

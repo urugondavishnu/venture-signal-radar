@@ -1,3 +1,4 @@
+import { Resend } from 'resend';
 import { ReportData, Company } from '../types';
 
 /**
@@ -63,74 +64,186 @@ function buildReportCSV(report: ReportData): string {
 /**
  * Build HTML email from report data
  */
-function buildReportEmail(company: Company, report: ReportData): string {
-  const renderSection = (title: string, items: Array<{ title: string; summary: string; source: string; url?: string }>): string => {
-    if (items.length === 0) return '';
-    const bullets = items
-      .map((item) => {
-        const link = item.url ? ` <a href="${item.url}" style="color:#3b82f6;">[source]</a>` : '';
-        return `<li style="margin-bottom:8px;">
-          <strong>${item.title}</strong>${link}<br/>
-          <span style="color:#6b7280;">${item.summary}</span><br/>
-          <small style="color:#9ca3af;">via ${item.source}</small>
-        </li>`;
-      })
-      .join('');
+export function buildReportEmail(company: Company, report: ReportData): string {
+  const mono = "'Courier New',Courier,monospace";
+  const serif = "Georgia,'Times New Roman',serif";
 
-    return `
-      <div style="margin-bottom:24px;">
-        <h2 style="color:#1f2937;font-size:18px;border-bottom:2px solid #e5e7eb;padding-bottom:8px;margin-bottom:12px;">${title}</h2>
-        <ul style="list-style:none;padding:0;">${bullets}</ul>
-      </div>
-    `;
-  };
+  const sectionLabels: Array<{ key: string; title: string; items: Array<{ title: string; summary: string; source: string; url?: string }> }> = [
+    { key: '01', title: 'Product Launches', items: report.product_launches },
+    { key: '02', title: 'Financings', items: report.financings },
+    { key: '03', title: 'Leadership Changes', items: report.leadership_changes },
+    { key: '04', title: 'Revenue Milestones', items: report.revenue_milestones },
+    { key: '05', title: 'Major Customer Wins', items: report.customer_wins },
+    { key: '06', title: 'Pricing Updates', items: report.pricing_updates },
+    { key: '07', title: 'Hiring Trends', items: report.hiring_trends },
+    { key: '08', title: 'General News', items: report.general_news },
+    { key: '09', title: 'Founder Contacts & Warm Intros', items: report.founder_contacts || [] },
+    { key: '10', title: 'Leading Indicators', items: report.leading_indicators || [] },
+    { key: '11', title: 'Competitive Landscape', items: report.competitive_landscape || [] },
+    { key: '12', title: 'Fundraising Signals', items: report.fundraising_signals || [] },
+  ];
 
-  const sections = [
-    renderSection('Product Launches', report.product_launches),
-    renderSection('Financings', report.financings),
-    renderSection('Leadership Changes', report.leadership_changes),
-    renderSection('Revenue Milestones', report.revenue_milestones),
-    renderSection('Major Customer Wins', report.customer_wins),
-    renderSection('Pricing Updates', report.pricing_updates),
-    renderSection('Hiring Trends', report.hiring_trends),
-    renderSection('General News', report.general_news),
-    renderSection('Founder Contacts & Warm Intros', report.founder_contacts || []),
-    renderSection('Leading Indicators', report.leading_indicators || []),
-    renderSection('Competitive Landscape', report.competitive_landscape || []),
-    renderSection('Fundraising Signals', report.fundraising_signals || []),
-  ]
-    .filter(Boolean)
+  const sections = sectionLabels
+    .filter((s) => s.items.length > 0)
+    .map((section) => {
+      const entries = section.items
+        .map((item) => {
+          const sourceLink = item.url
+            ? `<a href="${item.url}" style="color:#1342FF;text-decoration:none;font-family:${mono};font-size:11px;">[${item.source}]</a>`
+            : '';
+          return `
+            <tr>
+              <td style="padding:12px 0;border-bottom:1px solid #e8e8e8;vertical-align:top;">
+                <p style="margin:0;font-family:${serif};font-size:14px;line-height:1.6;color:#1a1a1a;">
+                  <strong>${item.title}</strong> ${sourceLink}
+                </p>
+                <p style="margin:6px 0 0;font-family:${serif};font-size:13px;line-height:1.55;color:#4a4a4a;">
+                  ${item.summary}
+                </p>
+                <p style="margin:4px 0 0;font-family:${mono};font-size:10px;letter-spacing:0.5px;color:#999;text-transform:uppercase;">
+                  via ${item.source}
+                </p>
+              </td>
+            </tr>`;
+        })
+        .join('');
+
+      return `
+        <table width="100%" cellpadding="0" cellspacing="0" style="margin-bottom:36px;">
+          <tr>
+            <td style="padding-bottom:10px;border-bottom:1px solid #1a1a1a;">
+              <span style="font-family:${mono};font-size:10px;letter-spacing:1px;color:#999;text-transform:uppercase;">SEC_${section.key}</span>
+              <h2 style="margin:4px 0 0;font-family:${serif};font-size:18px;font-weight:normal;color:#1a1a1a;letter-spacing:-0.3px;">
+                ${section.title}
+              </h2>
+            </td>
+          </tr>
+          ${entries}
+        </table>`;
+    })
     .join('');
 
   const noSignals = sections.length === 0
-    ? '<p style="color:#6b7280;">No new signals detected.</p>'
+    ? `<p style="font-family:${serif};font-size:14px;color:#999;text-align:center;padding:40px 0;">No new signals detected in this cycle.</p>`
     : '';
+
+  const now = new Date();
+  const dateFormatted = now.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
+  const timeFormatted = now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
 
   return `
     <!DOCTYPE html>
     <html>
-    <body style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;max-width:640px;margin:0 auto;padding:24px;background:#ffffff;">
-      <div style="background:linear-gradient(135deg,#1e3a5f,#2563eb);color:white;padding:24px;border-radius:12px;margin-bottom:24px;">
-        <h1 style="margin:0;font-size:22px;">Signal Intelligence Report</h1>
-        <p style="margin:4px 0 0;opacity:0.9;font-size:14px;">${company.company_name} — ${new Date().toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}</p>
-      </div>
+    <head><meta charset="utf-8"></head>
+    <body style="margin:0;padding:0;background:#f5f5f5;">
+      <table width="100%" cellpadding="0" cellspacing="0" style="background:#f5f5f5;">
+        <tr>
+          <td align="center" style="padding:32px 16px;">
+            <table width="100%" cellpadding="0" cellspacing="0" style="max-width:960px;background:#ffffff;border:1px solid #e0e0e0;">
 
-      <div style="background:#f9fafb;padding:16px;border-radius:8px;margin-bottom:24px;">
-        <h3 style="margin:0 0 8px;color:#374151;">Company Overview</h3>
-        <p style="margin:0;color:#6b7280;font-size:14px;">${report.company_overview}</p>
-        <p style="margin:8px 0 0;font-size:13px;color:#9ca3af;">
-          <a href="${company.website_url}" style="color:#3b82f6;">${company.website_url}</a>
-          ${company.industry ? ` · ${company.industry}` : ''}
-        </p>
-      </div>
+              <!-- Header title block -->
+              <tr>
+                <td style="padding:48px 40px 0;">
+                  <p style="margin:0;font-family:${mono};font-size:10px;letter-spacing:2px;color:#999;text-transform:uppercase;">
+                    Daily Delta
+                  </p>
+                  <h1 style="margin:8px 0 0;font-family:${serif};font-size:28px;font-weight:normal;color:#1a1a1a;letter-spacing:-0.5px;line-height:1.2;">
+                    Signal Intelligence Report
+                  </h1>
+                  <p style="margin:12px 0 0;font-family:${mono};font-size:11px;letter-spacing:0.5px;color:#666;text-transform:uppercase;">
+                    ${company.company_name}
+                  </p>
+                </td>
+              </tr>
 
-      ${sections}
-      ${noSignals}
+              <!-- Divider -->
+              <tr>
+                <td style="padding:20px 40px 0;">
+                  <p style="margin:0;font-family:${mono};font-size:10px;color:#ccc;letter-spacing:2px;">
+                    ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
+                  </p>
+                </td>
+              </tr>
 
-      <div style="border-top:1px solid #e5e7eb;padding-top:16px;margin-top:32px;text-align:center;color:#9ca3af;font-size:12px;">
-        <p>Venture Signal Tracker — Automated Intelligence Report</p>
-        <p style="font-size:11px;">A CSV file with structured data is attached to this email.</p>
-      </div>
+              <!-- Metadata block -->
+              <tr>
+                <td style="padding:20px 40px 0;">
+                  <table width="100%" cellpadding="0" cellspacing="0">
+                    <tr>
+                      <td width="50%" style="vertical-align:top;">
+                        <p style="margin:0;font-family:${mono};font-size:10px;letter-spacing:0.5px;color:#999;text-transform:uppercase;">Date</p>
+                        <p style="margin:2px 0 0;font-family:${serif};font-size:13px;color:#1a1a1a;">${dateFormatted}</p>
+                      </td>
+                      <td width="50%" style="vertical-align:top;">
+                        <p style="margin:0;font-family:${mono};font-size:10px;letter-spacing:0.5px;color:#999;text-transform:uppercase;">Time</p>
+                        <p style="margin:2px 0 0;font-family:${serif};font-size:13px;color:#1a1a1a;">${timeFormatted}</p>
+                      </td>
+                    </tr>
+                    <tr>
+                      <td width="50%" style="vertical-align:top;padding-top:12px;">
+                        <p style="margin:0;font-family:${mono};font-size:10px;letter-spacing:0.5px;color:#999;text-transform:uppercase;">Website</p>
+                        <p style="margin:2px 0 0;font-family:${mono};font-size:12px;">
+                          <a href="${company.website_url}" style="color:#1342FF;text-decoration:none;">${company.website_url}</a>
+                        </p>
+                      </td>
+                      <td width="50%" style="vertical-align:top;padding-top:12px;">
+                        ${company.industry ? `
+                        <p style="margin:0;font-family:${mono};font-size:10px;letter-spacing:0.5px;color:#999;text-transform:uppercase;">Industry</p>
+                        <p style="margin:2px 0 0;font-family:${serif};font-size:13px;color:#1a1a1a;">${company.industry}</p>
+                        ` : ''}
+                      </td>
+                    </tr>
+                  </table>
+                </td>
+              </tr>
+
+              <!-- Company overview -->
+              <tr>
+                <td style="padding:28px 40px 0;">
+                  <p style="margin:0;font-family:${mono};font-size:10px;letter-spacing:0.5px;color:#999;text-transform:uppercase;">Company Overview</p>
+                  <p style="margin:8px 0 0;font-family:${serif};font-size:14px;line-height:1.65;color:#333;">
+                    ${report.company_overview}
+                  </p>
+                </td>
+              </tr>
+
+              <!-- Divider -->
+              <tr>
+                <td style="padding:28px 40px 0;">
+                  <div style="border-top:1px solid #1a1a1a;"></div>
+                </td>
+              </tr>
+
+              <!-- Sections -->
+              <tr>
+                <td style="padding:28px 40px 0;">
+                  ${sections}
+                  ${noSignals}
+                </td>
+              </tr>
+
+              <!-- Footer -->
+              <tr>
+                <td style="padding:12px 40px 48px;">
+                  <p style="margin:0;font-family:${mono};font-size:10px;color:#ccc;letter-spacing:2px;">
+                    ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
+                  </p>
+                  <p style="margin:16px 0 0;font-family:${mono};font-size:10px;letter-spacing:0.5px;color:#999;text-transform:uppercase;text-align:center;">
+                    Daily Delta &mdash; Automated Intelligence Report
+                  </p>
+                  <p style="margin:4px 0 0;font-family:${mono};font-size:10px;color:#bbb;text-align:center;">
+                    A CSV file with structured data is attached to this email.
+                  </p>
+                  <p style="margin:16px 0 0;font-family:${mono};font-size:10px;text-align:center;color:#ccc;">
+                    ╌╌ END ╌╌
+                  </p>
+                </td>
+              </tr>
+
+            </table>
+          </td>
+        </tr>
+      </table>
     </body>
     </html>
   `;
@@ -145,11 +258,10 @@ export async function sendReportEmail(
   report: ReportData,
 ): Promise<boolean> {
   try {
-    const apiKey = process.env.BREVO_API_KEY;
-    if (!apiKey) throw new Error('BREVO_API_KEY must be configured');
+    const apiKey = process.env.RESEND_API_KEY;
+    if (!apiKey) throw new Error('RESEND_API_KEY must be configured');
 
-    const fromEmail = process.env.BREVO_FROM_EMAIL || 'signals@venture-signal-radar.com';
-    const fromName = 'Venture Signal Radar';
+    const fromEmail = process.env.RESEND_FROM_EMAIL || 'signals@dailydelta.com';
     const html = buildReportEmail(company, report);
     const csv = buildReportCSV(report);
 
@@ -170,34 +282,25 @@ export async function sendReportEmail(
     const safeCompanyName = company.company_name.replace(/[^a-zA-Z0-9_-]/g, '_');
     const fileDate = now.toISOString().slice(0, 10);
 
-    const res = await fetch('https://api.brevo.com/v3/smtp/email', {
-      method: 'POST',
-      headers: {
-        'api-key': apiKey,
-        'Content-Type': 'application/json',
-        Accept: 'application/json',
-      },
-      body: JSON.stringify({
-        sender: { name: fromName, email: fromEmail },
-        to: [{ email: toEmail }],
-        subject,
-        htmlContent: html,
-        attachment: [
-          {
-            name: `${safeCompanyName}_report_${fileDate}.csv`,
-            content: Buffer.from(csv).toString('base64'),
-          },
-        ],
-      }),
+    const resend = new Resend(apiKey);
+    const { data, error } = await resend.emails.send({
+      from: `Daily Delta <${fromEmail}>`,
+      to: [toEmail],
+      subject,
+      html,
+      attachments: [
+        {
+          filename: `${safeCompanyName}_report_${fileDate}.csv`,
+          content: Buffer.from(csv),
+        },
+      ],
     });
 
-    if (!res.ok) {
-      const err = await res.text();
-      throw new Error(`Brevo API ${res.status}: ${err}`);
+    if (error) {
+      throw new Error(`Resend API error: ${error.message}`);
     }
 
-    const result = await res.json() as { messageId?: string };
-    console.log(`[Email] Report sent to ${toEmail} for ${company.company_name} (messageId: ${result.messageId})`);
+    console.log(`[Email] Report sent to ${toEmail} for ${company.company_name} (id: ${data?.id})`);
     return true;
   } catch (err) {
     console.error(`[Email] Failed to send report:`, err);

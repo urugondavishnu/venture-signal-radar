@@ -16,7 +16,7 @@ chrome.sidePanel.setOptions({ enabled: true });
 
 // Extension install handler
 chrome.runtime.onInstalled.addListener(() => {
-  console.log('[Signal Tracker] Extension installed');
+  console.log('[Daily Delta] Extension installed');
 });
 
 // Message handler — provides page info to the side panel

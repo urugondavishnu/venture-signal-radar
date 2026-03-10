@@ -61,7 +61,7 @@ export function SignUpPage({ onSwitchToLogin }: SignUpPageProps) {
                 Create Account
               </h1>
               <p className="text-[13px] text-[#555568] text-center mt-2 leading-snug">
-                Join Venture Signal Radar
+                Join Daily Delta
               </p>
               {success ? (
                 <div className="flex flex-col items-center mt-6">

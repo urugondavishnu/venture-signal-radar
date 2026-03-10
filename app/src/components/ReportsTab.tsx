@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import { getReports, deleteReport, Report, ReportData } from '../api/client';
+import { getReports, deleteReport, sendReportEmail, previewReportEmail, Report, ReportData } from '../api/client';
 
 interface ReportsTabProps {
   triggerReload: number;
@@ -25,6 +25,8 @@ export function ReportsTab({ triggerReload }: ReportsTabProps) {
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [emailingId, setEmailingId] = useState<string | null>(null);
+  const [emailSentId, setEmailSentId] = useState<string | null>(null);
 
   const loadReports = useCallback(async () => {
     try {
@@ -53,6 +55,40 @@ export function ReportsTab({ triggerReload }: ReportsTabProps) {
       alert('Failed to delete report.');
     } finally {
       setDeletingId(null);
+    }
+  };
+
+  const handlePreview = async (reportId: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    try {
+      const html = await previewReportEmail(reportId);
+      const win = window.open('', '_blank');
+      if (win) {
+        win.document.write(html);
+        win.document.close();
+      }
+    } catch {
+      alert('Failed to load preview.');
+    }
+  };
+
+  const handleSendEmail = async (reportId: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (emailingId) return;
+    setEmailingId(reportId);
+    setEmailSentId(null);
+    try {
+      const result = await sendReportEmail(reportId);
+      if (result.success) {
+        setEmailSentId(reportId);
+        setTimeout(() => setEmailSentId(null), 4000);
+      } else {
+        alert(result.error || 'Failed to send email.');
+      }
+    } catch {
+      alert('Failed to send email.');
+    } finally {
+      setEmailingId(null);
     }
   };
 
@@ -102,6 +138,23 @@ export function ReportsTab({ triggerReload }: ReportsTabProps) {
               </div>
               <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                 <button
+                  className="btn btn-sm btn-secondary"
+                  onClick={(e) => handlePreview(report.report_id, e)}
+                >
+                  Preview
+                </button>
+                <button
+                  className="btn btn-sm btn-secondary"
+                  onClick={(e) => handleSendEmail(report.report_id, e)}
+                  disabled={emailingId === report.report_id || emailSentId === report.report_id}
+                >
+                  {emailSentId === report.report_id
+                    ? '✓ Sent'
+                    : emailingId === report.report_id
+                      ? 'Sending...'
+                      : 'Email'}
+                </button>
+                <button
                   className="btn btn-sm btn-danger"
                   onClick={(e) => handleDelete(report.report_id, e)}
                   disabled={deletingId === report.report_id}
@@ -127,7 +180,7 @@ export function ReportsTab({ triggerReload }: ReportsTabProps) {
                             {item.title}
                             {item.url && (
                               <a href={item.url} target="_blank" rel="noopener noreferrer" className="report-link">
-                                [source]
+                                [{item.source}]
                               </a>
                             )}
                           </div>

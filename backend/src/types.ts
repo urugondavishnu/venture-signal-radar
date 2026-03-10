@@ -1,5 +1,5 @@
 // ============================================
-// Shared Types for Startup Signal Tracker
+// Shared Types for Daily Delta
 // ============================================
 
 // ---------- Database Entities ----------

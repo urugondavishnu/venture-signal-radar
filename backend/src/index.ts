@@ -7,7 +7,7 @@ const PORT = process.env.PORT || 3001;
 startScheduler();
 
 const server = app.listen(PORT, () => {
-  console.log(`[Server] Venture Signal Tracker running on port ${PORT}`);
+  console.log(`[Server] Daily Delta running on port ${PORT}`);
 });
 
 // Graceful shutdown

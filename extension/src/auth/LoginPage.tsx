@@ -54,7 +54,7 @@ export function LoginPage({ onSwitchToSignUp }: LoginPageProps) {
                 Welcome Back
               </h1>
               <p className="text-[13px] text-[#555568] text-center mt-2 leading-snug">
-                Sign in to Venture Signal Radar
+                Sign in to Daily Delta
               </p>
               <div className="mt-5 px-3.5 py-2.5 rounded-lg bg-[#16161f] border border-[#22222e]">
                 <p className="text-[11px] text-[#7a7a90] leading-[1.6] text-center">

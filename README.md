@@ -1,8 +1,8 @@
-# Venture Signal Radar
+# Daily Delta
 
 **Live:** [https://venture-signal-radar-r1tq.onrender.com](https://venture-signal-radar-r1tq.onrender.com)
 
-Venture Signal Radar is a startup intelligence platform that lets you track companies with one click and receive automated intelligence reports. It dispatches 10 parallel TinyFish web agents per company — each navigating real websites (blogs, Google News, careers pages, GitHub, Google Trends) — to collect signals across product launches, fundraising, hiring, pricing changes, competitive moves, and more. Available as both a web application and a Chrome extension.
+Daily Delta is a startup intelligence platform that lets you track companies with one click and receive automated intelligence reports. It dispatches 10 parallel TinyFish web agents per company — each navigating real websites (blogs, Google News, careers pages, GitHub, Google Trends) — to collect signals across product launches, fundraising, hiring, pricing changes, competitive moves, and more. Available as both a web application and a Chrome extension.
 
 ## Demo
 
@@ -86,7 +86,7 @@ The response streams SSE events including a `streamingUrl` (live view of the age
 - Node.js 18+
 - A [Supabase](https://supabase.com) project
 - A [TinyFish](https://agent.tinyfish.ai) API key
-- A [Brevo](https://brevo.com) account (for email reports)
+- A [Resend](https://resend.com) account (for email reports)
 
 ### Database Setup
 
@@ -112,8 +112,8 @@ Create `backend/.env`:
 SUPABASE_URL=https://your-project.supabase.co
 SUPABASE_SERVICE_KEY=your_supabase_service_role_key
 TINYFISH_API_KEY=your_tinyfish_api_key
-BREVO_API_KEY=your_brevo_api_key
-BREVO_FROM_EMAIL=your_verified_sender@email.com
+RESEND_API_KEY=your_resend_api_key
+RESEND_FROM_EMAIL=your_verified_sender@email.com
 ```
 
 Start the dev server:
@@ -183,7 +183,7 @@ Load in Chrome:
 4. Add environment variables:
    - `SUPABASE_URL`, `SUPABASE_SERVICE_KEY`
    - `TINYFISH_API_KEY`
-   - `BREVO_API_KEY`, `BREVO_FROM_EMAIL`
+   - `RESEND_API_KEY`, `RESEND_FROM_EMAIL`
    - `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY` (needed at build time for the frontend)
 
 The backend serves the built web app as static files, so both run on a single Render service.
@@ -259,7 +259,7 @@ The backend serves the built web app as static files, so both run on a single Re
 ## Project Structure
 
 ```
-venture-signal-radar/
+daily-delta/
 ├── app/                          # Web application (React + Vite)
 │   ├── src/
 │   │   ├── auth/                 # Login, signup, auth context
@@ -278,7 +278,7 @@ venture-signal-radar/
 │   │   ├── middleware/           # Supabase JWT auth
 │   │   ├── db/                   # Supabase client + migrations
 │   │   └── utils/                # SSE helpers
-│   └── .env                      # SUPABASE_URL, TINYFISH_API_KEY, BREVO_API_KEY
+│   └── .env                      # SUPABASE_URL, TINYFISH_API_KEY, RESEND_API_KEY
 │
 ├── extension/                    # Chrome extension (React + MV3)
 │   ├── src/

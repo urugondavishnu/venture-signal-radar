@@ -124,6 +124,16 @@ export async function deleteReport(id: string): Promise<void> {
   await authFetch(`${API_BASE}/reports/${id}`, { method: 'DELETE' });
 }
 
+export async function sendReportEmail(reportId: string): Promise<{ success: boolean; email?: string; error?: string }> {
+  const res = await authFetch(`${API_BASE}/reports/${reportId}/send-email`, { method: 'POST' });
+  return res.json();
+}
+
+export async function previewReportEmail(reportId: string): Promise<string> {
+  const res = await authFetch(`${API_BASE}/reports/${reportId}/preview`);
+  return res.text();
+}
+
 export async function getReports(companyId?: string): Promise<Report[]> {
   const url = companyId ? `${API_BASE}/reports?company_id=${companyId}` : `${API_BASE}/reports`;
   const res = await authFetch(url);

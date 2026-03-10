@@ -1,6 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { Header } from './components/Header';
-import { TabBar, TabId } from './components/TabBar';
+import { Sidebar, TabId } from './components/TabBar';
 import { CompaniesTab } from './components/CompaniesTab';
 import { ActiveRunsTab } from './components/ActiveRunsTab';
 import { ReportsTab } from './components/ReportsTab';
@@ -49,7 +48,7 @@ interface QueueEntry {
 // ---------- App ----------
 
 export function App() {
-  const { user, loading: authLoading, signOut } = useAuth();
+  const { user, loading: authLoading, configError, signOut } = useAuth();
   const [authPage, setAuthPage] = useState<'login' | 'signup'>('login');
 
   const [companies, setCompanies] = useState<Company[]>([]);
@@ -299,6 +298,33 @@ export function App() {
 
   // ---------- Render ----------
 
+  // Missing Supabase config
+  if (configError) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-[#F5F5F5] px-4">
+        <div className="w-full max-w-[480px] bg-white rounded-sm p-8" style={{ boxShadow: 'var(--card-shadow)' }}>
+          <div className="flex items-center justify-center w-12 h-12 rounded-sm bg-red-50 border border-red-200 mx-auto mb-4">
+            <span className="text-2xl leading-none">&#9888;</span>
+          </div>
+          <h1 className="text-[20px] font-semibold text-black text-center" style={{ fontFamily: "'Ubuntu', 'Helvetica Neue', Arial, sans-serif" }}>
+            Configuration Required
+          </h1>
+          <p className="text-[13px] text-black/50 text-center mt-2 leading-snug mb-5" style={{ fontFamily: "'PT Serif', Georgia, serif" }}>
+            Supabase environment variables are missing. Create an <code className="text-[#1342FF] bg-[#1342FF]/5 px-1.5 py-0.5 rounded-sm text-[12px]" style={{ fontFamily: "'Departure Mono', 'SF Mono', monospace" }}>app/.env</code> file:
+          </p>
+          <div className="bg-[#F5F5F5] border border-black/10 rounded-sm p-4 text-[12px] text-black/60 leading-relaxed" style={{ fontFamily: "'Departure Mono', 'SF Mono', monospace" }}>
+            <div className="text-black/30"># Supabase Dashboard &gt; Project Settings &gt; API</div>
+            <div className="mt-1"><span className="text-[#1342FF]">VITE_SUPABASE_URL</span>=https://your-project.supabase.co</div>
+            <div><span className="text-[#1342FF]">VITE_SUPABASE_ANON_KEY</span>=your-anon-key</div>
+          </div>
+          <p className="text-[11px] text-black/30 text-center mt-4" style={{ fontFamily: "'Departure Mono', 'SF Mono', monospace", textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+            Restart the dev server after creating the file.
+          </p>
+        </div>
+      </div>
+    );
+  }
+
   // Auth loading
   if (authLoading) {
     return (
@@ -331,11 +357,12 @@ export function App() {
 
   return (
     <div className="app">
-      <Header email={user.email || null} onSignOut={signOut} />
-      <TabBar
+      <Sidebar
         activeTab={activeTab}
         onTabChange={setActiveTab}
         activeRunCount={incompleteRuns.length}
+        email={user.email || null}
+        onSignOut={signOut}
       />
       <main className="app-content">
         {activeTab === 'companies' && (
